@@ -124,7 +124,16 @@
 						assigned-clock-rates = <19200000>;
 
 						orientation = <0>; /* front facing */
-						rotation = <180>;
+						/* NOTE: rotation is 0: the sensor's native readout is
+						 * already upright. The upstream Linaro/X1E device trees
+						 * use rotation = <180>, but with the ov02c10 driver in
+						 * >=6.19/7.2 kernels (whose flip controls use the sensor's
+						 * ISP rotate/window engine) libcamera then applies
+						 * hflip+vflip to "correct" an already-upright image,
+						 * delivering it upside-down. Verified empirically on the
+						 * Yoga Slim 7x: flips 0/0 = upright.
+						 */
+						rotation = <0>;
 
 						avdd-supply = <&vreg_l7b_2p8>;
 						dvdd-supply = <&vreg_l1m_1p2>;
