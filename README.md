@@ -58,6 +58,25 @@ We have a custom kernel package, but it has been stuck at v6.19 due to a lack of
 boot.kernelPackages = pkgs.x1e80100-linux;
 ```
 
+## Camera {#camera}
+
+The Yoga Slim 7x front camera (OmniVision OV02C10) needs CAMSS/CCI/CAMCC and
+sensor device tree nodes, which are not yet present in the device tree bundled
+with mainline kernels. On the custom `x1e80100-linux` kernel these nodes are
+already included (via cherry-picks from the Linaro arm64-laptops tree).
+
+When using a stock kernel (e.g. `linuxPackages_latest`), enable the camera
+device tree overlay instead:
+
+```nix
+hardware.lenovo-yoga-slim7x.camera.enable = true;
+```
+
+This applies a DT overlay (CAMCC, CCI1, CAMSS and the OV02C10 sensor node with
+its power rails) on top of the kernel's bundled
+`x1e80100-lenovo-yoga-slim7x.dtb`. Do not enable it together with the
+`x1e80100-linux` kernel, since the nodes would be applied twice.
+
 ## Getting the installer ISO
 
 Binary releases of the install ISO are available, or alternately you can compile it yourself (described below).
