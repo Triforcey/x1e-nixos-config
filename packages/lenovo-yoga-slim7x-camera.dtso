@@ -29,6 +29,15 @@
 /dts-v1/;
 /plugin/;
 
+/*
+ * Declare the boards this overlay applies to, so that NixOS's
+ * `deviceTree.applyOverlays` matches it against the target DTB's
+ * compatible strings.
+ */
+/ {
+	compatible = "lenovo,yoga-slim7x", "qcom,x1e80100";
+};
+
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/clock/qcom,x1e80100-camcc.h>
