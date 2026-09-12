@@ -5,13 +5,19 @@
  * tree that does not yet carry it (e.g. stock mainline
  * `x1e80100-lenovo-yoga-slim7x.dtb`):
  *
- *   - i2c5 (i2c@b94000) enabled, 400 kHz
+ *   - i2c5 (/soc@0/geniqup@bc0000/i2c@b94000) enabled, 400 kHz
  *   - embedded-controller@76 (IT8987 EC) with the GPIO66 falling-edge
  *     interrupt and its pinctrl state
  *
  * With the node present, an EC kernel driver can notify the EC when the host
  * suspends and resumes. Without it, the EC is never told about suspend: the
  * keyboard backlight stays on and the suspend LED does not blink.
+ *
+ * Path note: the i2c controllers on x1e live under the QUPv3 wrapper nodes
+ * (the base DTB aliases i2c5 = "/soc@0/geniqup@bc0000/i2c@b94000"), and the
+ * TLMM pinctrl node is /soc@0/pinctrl@f100000. Fragments must target those
+ * real paths - libfdt's overlay application fails with FDT_ERR_NOTFOUND
+ * otherwise.
  *
  * Compatible strings:
  *   - "lenovo,yoga-slim7x-ec" matches the slim7x EC driver from
@@ -44,7 +50,7 @@
 / {
 	/* i2c5 hosts the embedded controller */
 	fragment@0 {
-		target-path = "/soc@0/i2c@b94000";
+		target-path = "/soc@0/geniqup@bc0000/i2c@b94000";
 
 		__overlay__ {
 			clock-frequency = <400000>;
@@ -65,7 +71,7 @@
 
 	/* EC interrupt pin: GPIO66, no pull */
 	fragment@1 {
-		target = <&tlmm>;
+		target-path = "/soc@0/pinctrl@f100000";
 
 		__overlay__ {
 			ec_int_n_default: ec-int-n-state {
