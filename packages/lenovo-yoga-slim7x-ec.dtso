@@ -1,0 +1,78 @@
+/*
+ * Lenovo Yoga Slim 7x (X1E80100) embedded controller device-tree overlay.
+ *
+ * Adds the missing IT8987 embedded controller node on top of a kernel device
+ * tree that does not yet carry it (e.g. stock mainline
+ * `x1e80100-lenovo-yoga-slim7x.dtb`):
+ *
+ *   - i2c5 (i2c@b94000) enabled, 400 kHz
+ *   - embedded-controller@76 (IT8987 EC) with the GPIO66 falling-edge
+ *     interrupt and its pinctrl state
+ *
+ * With the node present, an EC kernel driver can notify the EC when the host
+ * suspends and resumes. Without it, the EC is never told about suspend: the
+ * keyboard backlight stays on and the suspend LED does not blink.
+ *
+ * Compatible strings:
+ *   - "lenovo,yoga-slim7x-ec" matches the slim7x EC driver from
+ *     https://lore.kernel.org/lkml/20241219200821.8328-1-maccraft123mc@gmail.com/
+ *     (applied to this flake's `x1e80100-linux` kernel).
+ *   - "qcom,hamoa-crd-ec" matches the mainline `qcom-hamoa-ec` driver
+ *     (kernel >= 7.2, CONFIG_EC_QCOM_HAMOA), which talks the same EC command
+ *     interface and also reports suspend entry/exit.
+ *
+ * Note: the flake's own `x1e80100-linux` kernel already contains this node
+ * (via the `lenovo-yoga-slim7x-ec.patch` kernel patch). Only enable this
+ * overlay when using a stock kernel whose device tree still lacks the EC
+ * node.
+ */
+
+/dts-v1/;
+/plugin/;
+
+/*
+ * Declare the boards this overlay applies to, so that NixOS's
+ * `deviceTree.applyOverlays` matches it against the target DTB's
+ * compatible strings.
+ */
+/ {
+	compatible = "lenovo,yoga-slim7x", "qcom,x1e80100";
+};
+
+#include <dt-bindings/interrupt-controller/irq.h>
+
+/ {
+	/* i2c5 hosts the embedded controller */
+	fragment@0 {
+		target-path = "/soc@0/i2c@b94000";
+
+		__overlay__ {
+			clock-frequency = <400000>;
+
+			status = "okay";
+
+			embedded-controller@76 {
+				compatible = "lenovo,yoga-slim7x-ec", "qcom,x1e-it8987-ec", "qcom,hamoa-crd-ec";
+				reg = <0x76>;
+
+				interrupts-extended = <&tlmm 66 IRQ_TYPE_EDGE_FALLING>;
+
+				pinctrl-0 = <&ec_int_n_default>;
+				pinctrl-names = "default";
+			};
+		};
+	};
+
+	/* EC interrupt pin: GPIO66, no pull */
+	fragment@1 {
+		target = <&tlmm>;
+
+		__overlay__ {
+			ec_int_n_default: ec-int-n-state {
+				pins = "gpio66";
+				function = "gpio";
+				bias-disable;
+			};
+		};
+	};
+};

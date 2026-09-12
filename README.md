@@ -77,6 +77,40 @@ its power rails) on top of the kernel's bundled
 `x1e80100-lenovo-yoga-slim7x.dtb`. Do not enable it together with the
 `x1e80100-linux` kernel, since the nodes would be applied twice.
 
+## Embedded controller / suspend {#embedded-controller}
+
+The Yoga Slim 7x has an ITE IT8987 embedded controller on i2c5 (address 0x76)
+which is not described in the device tree bundled with mainline kernels, so no
+kernel driver notifies the EC when the host suspends and resumes. Without that,
+the EC keeps the keyboard backlight on while suspended and the suspend LED
+does not blink.
+
+When using a stock kernel (e.g. `linuxPackages_latest`), enable the EC
+device tree overlay:
+
+```nix
+hardware.lenovo-yoga-slim7x.ec.enable = true;
+```
+
+The overlay adds the `embedded-controller@76` node on i2c5. On kernels >= 7.2
+the mainline `qcom-hamoa-ec` driver binds to it (compatible
+`qcom,hamoa-crd-ec`) and reports suspend entry/exit to the EC. Note that
+mainline kernels older than 7.2 do not have this driver at all, and nixpkgs
+does not enable `CONFIG_EC_QCOM_HAMOA` by default, so you likely also want to
+enable it in the kernel configuration, e.g.:
+
+```nix
+boot.kernelPackages = pkgs.linuxPackages_latest.extend (final: prev: {
+  kernel = prev.kernel.override {
+    structuredExtraConfig.EC_QCOM_HAMOA = lib.kernel.module;
+    ignoreConfigErrors = true;
+  };
+});
+```
+
+Do not enable the overlay together with the `x1e80100-linux` kernel: its
+device tree already contains the EC node (via the slim7x EC kernel patch).
+
 ## Getting the installer ISO
 
 Binary releases of the install ISO are available, or alternately you can compile it yourself (described below).
