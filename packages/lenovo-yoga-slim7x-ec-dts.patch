@@ -1,0 +1,54 @@
+commit 0000000000000000000000000000000000000000
+Author: Maya Matuszczyk <maccraft123mc@gmail.com>
+Date:   Thu Dec 19 21:08:18 2024 +0100
+
+    arm64: dts: qcom: x1e80100-lenovo-yoga-slim7x: add embedded controller
+
+    DT-node-only adaptation of the slim7x EC patch
+    (https://lore.kernel.org/lkml/20241219200821.8328-1-maccraft123mc@gmail.com/)
+    for kernel 7.2: the driver part is mainline (EC_QCOM_HAMOA /
+    qcom-hamoa-ec) and binds via the "qcom,hamoa-crd-ec" compatible, so
+    only the i2c5 node + GPIO66 pinctrl state remain, with the compatible
+    switched accordingly. Verified applying on the post-Linaro-cherry-pick
+    v7.2 tree, 2026-09-15.
+
+diff --git a/arch/arm64/boot/dts/qcom/x1e80100-lenovo-yoga-slim7x.dts b/arch/arm64/boot/dts/qcom/x1e80100-lenovo-yoga-slim7x.dts
+index 098fec189e7f3..ead4510dda5b8 100644
+--- a/arch/arm64/boot/dts/qcom/x1e80100-lenovo-yoga-slim7x.dts
++++ b/arch/arm64/boot/dts/qcom/x1e80100-lenovo-yoga-slim7x.dts
+@@ -1065,6 +1065,22 @@ retimer_ss0_con_sbu_out: endpoint {
+ 	};
+ };
+ 
++&i2c5 {
++	clock-frequency = <400000>;
++
++	status = "okay";
++
++	embedded-controller@76 {
++		compatible = "qcom,hamoa-crd-ec";
++		reg = <0x76>;
++
++		interrupts-extended = <&tlmm 66 IRQ_TYPE_EDGE_FALLING>;
++
++		pinctrl-0 = <&ec_int_n_default>;
++		pinctrl-names = "default";
++	};
++};
++
+ &i2c7 {
+ 	clock-frequency = <400000>;
+ 
+@@ -1481,6 +1497,12 @@ reset-n-pins {
+ 		};
+ 	};
+ 
++	ec_int_n_default: ec-int-n-state {
++		pins = "gpio66";
++		function = "gpio";
++		bias-disable;
++	};
++
+ 	edp_reg_en: edp-reg-en-state {
+ 		pins = "gpio70";
+ 		function = "gpio";

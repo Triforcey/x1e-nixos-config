@@ -1,0 +1,55 @@
+commit 0000000000000000000000000000000000000000
+Author: Krishna Chaitanya Chundru <krishna.chundru@oss.qualcomm.com>
+Date:   Thu Jul 9 06:47:17 2026 +0530
+
+    PCI: qcom: Keep PERST# GPIO state as-is during probe
+
+    Link retention series v3 patch 2/4 (not merged upstream as of 2026-09).
+    Applies to the v7.2 pcie-qcom.c verbatim (parse_perst refactor is
+    mainline there).
+    From: https://marc.info/?l=linux-kernel&m=178357909997412&q=raw
+    (lore message-id 20260709-link_retain-v3-2-81a9d187bb61@oss.qualcomm.com)
+
+The PERST# signal is used to reset PCIe devices. Requesting the GPIO with
+GPIOD_OUT_HIGH forces the line high during probe, which can unintentionally
+assert reset on devices already out of reset and break proper link
+sequencing.
+
+Change the request to use GPIOD_ASIS so the driver preserves the existing
+GPIO state configured by the bootloader or firmware. This allows platforms
+that manage PERST# externally to maintain correct reset sequencing. PERST#
+is asserted explicitly later during qcom_pcie_host_init(), so forcing it
+high at probe time is unnecessary.
+
+Tested-by: Qiang Yu <qiang.yu@oss.qualcomm.com>
+Signed-off-by: Krishna Chaitanya Chundru <krishna.chundru@oss.qualcomm.com>
+---
+ drivers/pci/controller/dwc/pcie-qcom.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/pci/controller/dwc/pcie-qcom.c b/drivers/pci/controller/dwc/pcie-qcom.c
+index d8eb52857f69..9ca620d4746a 100644
+--- a/drivers/pci/controller/dwc/pcie-qcom.c
++++ b/drivers/pci/controller/dwc/pcie-qcom.c
+@@ -1841,7 +1841,7 @@ static int qcom_pcie_parse_perst(struct qcom_pcie *pcie,
+ 		goto parse_child_node;
+ 
+ 	reset = devm_fwnode_gpiod_get(dev, of_fwnode_handle(np), "reset",
+-				      GPIOD_OUT_HIGH, "PERST#");
++				      GPIOD_ASIS, "PERST#");
+ 	if (IS_ERR(reset)) {
+ 		/*
+ 		 * FIXME: GPIOLIB currently supports exclusive GPIO access only.
+@@ -1918,7 +1918,7 @@ static int qcom_pcie_parse_ports(struct qcom_pcie *pcie)
+ 
+ 	if (of_find_property(dev->of_node, "perst-gpios", NULL)) {
+ 		pcie->reset = devm_gpiod_get_optional(dev, "perst",
+-						      GPIOD_OUT_HIGH);
++						      GPIOD_ASIS);
+ 		if (IS_ERR(pcie->reset))
+ 			return PTR_ERR(pcie->reset);
+ 	}
+
+-- 
+2.34.1
+
