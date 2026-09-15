@@ -112,3 +112,24 @@ Run all of these with and without the params and diff:
   we can avoid those kernel command line arguments"). When 7.3 lands with
   that work, re-evaluate — upstream dropping the params on `main` is the
   signal to follow (see the comment in `modules/x1e80100.nix`).
+
+## Why the patches cannot ride on the stock kernel without a rebuild
+
+Checked on fertile-forge (nixpkgs `linuxPackages_latest`, 7.2.4, 2026-09-15):
+
+- `CONFIG_PCIE_QCOM=y` — the PCIe controller driver (where the retention
+  logic lives, patches 2-4) is **built into** the stock kernel. A built-in
+  driver cannot be overridden by an injected out-of-tree `.ko` (module
+  blacklisting does not affect built-ins either), so the
+  "rebuild only the two modules via `boot.extraModulePackages`" shortcut is
+  **not viable** for the controller half. Flipping it to `=m` is a kernel
+  config change, which is itself a full kernel rebuild.
+- `CONFIG_PHY_QCOM_QMP_PCIE=m` — the PHY driver (patch 1) *is* a module and
+  could be replaced out-of-tree, but on its own it accomplishes nothing:
+  the stock built-in controller still tears down and retrains the link.
+
+So on the stock kernel the choice is binary: full rebuild with the patches
+(the series should apply near-verbatim there — it was authored after v6.19),
+or wait for the series to land upstream in 7.3 and ride the binary cache.
+The fork's own `x1e80100-linux` kernel (which now carries the series) is the
+only immediately-available kernel with retention.
