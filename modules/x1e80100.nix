@@ -94,6 +94,32 @@ in
 
           boot.kernelParams = lib.mkMerge [
             [
+              # Keep power domains / clocks that the kernel considers unused
+              # always-on. Still required as of kernel 7.2.x (2026-09):
+              #
+              # - Upstream (kuruczgy/x1e-nixos-config) still ships both on
+              #   main, including after "Switch to latest upstream kernel"
+              #   (14f28d2), and has never dropped them on any branch.
+              #
+              # - The aarch64-laptops distro integration guide still
+              #   recommends both: some clocks and power domains may be
+              #   modelled incorrectly, so late-init clk_disable_unused /
+              #   genpd cleanup can power off hardware needed for display,
+              #   USB-C, or PCIe right after the console goes quiet.
+              #
+              # - Making removal safe is upstream work in progress: explicit
+              #   TCSR USB/PCIe PHY clock-reference claims in the x1e80100
+              #   DTs (per-board), and the PCIe link retention series
+              #   (link_retain v3, under review for 7.3, not merged as of
+              #   2026-09). Recent upstream issue #177 (T14s screen off
+              #   during boot, Oct 2025) shows late-boot display fragility
+              #   persists even with these params present.
+              #
+              # Cost of keeping them is ~2-4W idle. Remove only after
+              # boot-testing without them on real hardware (panel through
+              # stage 1, USB-C / DP altmode, PCIe, audio). Cannot be verified
+              # remotely, so re-evaluate when 7.3 DTs land and upstream
+              # drops the params first.
               "pd_ignore_unused"
               "clk_ignore_unused"
 
