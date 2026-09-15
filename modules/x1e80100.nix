@@ -168,9 +168,25 @@ in
           boot.kernelPackages = lib.mkDefault pkgs.linuxPackages_latest;
 
           boot.initrd.extraFirmwarePaths = lib.mkMerge [
+            # Adreno (a740 / gen70500) GPU firmware, needed by all x1e80100
+            # devices. The msm driver is in availableKernelModules and probes
+            # the GPU during stage 1, so without these the SQE load fails
+            # there ("Direct firmware load for qcom/gen70500_sqe.fw failed
+            # with error -2") and the GPU only comes up after switch-root
+            # (~32 s later; observed 2026-09-15 on the slim7x: "loaded
+            # qcom/gen70500_sqe.fw from new location" at 34.8 s). Kernel
+            # 7.2.x requests the renamed gen70500_sqe.fw / gen70500_gmu.bin
+            # (formerly a740_sqe.fw); all three ship in nixpkgs linux-firmware
+            # zstd-compressed, and modules-closure.sh resolves them by
+            # retrying with a .zst suffix.
+            [
+              "qcom/gen70500_sqe.fw"
+              "qcom/gen70500_gmu.bin"
+              "qcom/x1e80100/gen70500_zap.mbn"
+            ]
+
             (lib.mkIf cfg.lenovo-thinkpad-t14s.enable [
               # Basically all of the x1e80100 modules. Avoids fw_load errors in initrd.
-              "qcom/x1e80100/gen70500_zap.mbn"
               "qcom/x1e80100/LENOVO/21N1/cdspr.jsn"
               "qcom/x1e80100/LENOVO/21N1/qcadsp8380.mbn"
               "qcom/x1e80100/LENOVO/21N1/adspua.jsn"
