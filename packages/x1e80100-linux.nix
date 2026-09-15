@@ -178,10 +178,11 @@ linuxPackagesFor (buildLinux {
       patch = ./lenovo-yoga-slim7x-camera-rotation.patch;
     }
 
-    # NOTE: the DSPP GC / gamma LUT patch (gamma-lut.patch) from the 6.19
-    # kernel is dropped here: it conflicts with the restructured 7.2 DPU
-    # code (6 files, dpu_crtc.c alone has 6+ failed hunks) and needs a real
-    # rework against 7.2. Display quality feature, not boot-critical.
+    # Gamma LUT / DSPP GC: the old 6.19-era patch (gamma-lut.patch) is gone
+    # for good — the feature was merged mainline between 6.19 and 7.2
+    # (dpu_crtc.c has _dpu_crtc_get_gc_lut/setup_gc, and the x1e80100
+    # catalog's DSPPs use sdm845_dspp_sblk which carries the .gc block).
+    # Nothing to patch.
   ];
 
   # TODO: Look into the errors and remove this.
