@@ -202,6 +202,55 @@ in
             ])
           ];
 
+          # Upstream linux-firmware (still true in the 20260810 snapshot used
+          # by nixpkgs) never received the Yoga Slim 7x CDSP device-tree blob.
+          # The kernel's x1e80100-yoga-slim7x.dts declares the CDSP as split
+          # firmware: "qcom/x1e80100/LENOVO/83ED/qccdsp8380.mbn" +
+          # "qcom/x1e80100/LENOVO/83ED/cdsp_dtbs.elf", but Lenovo's April 2025
+          # linux-firmware submission (upstream commit c0a41b80, "qcom:
+          # x1e80100: Support for Lenovo Yoga Slim 7 Snapdragon platform")
+          # shipped the ADSP pair only (qcadsp8380.mbn + adsp_dtbs.elf); no
+          # later commit ever added the 83ED cdsp_dtbs.elf. Observed on kernel
+          # 7.2.4 (2026-09-15 dmesg, stage 2 at ~33.4 s — qcom_q6v5_pas is not
+          # in the initrd module list, so this is a rootfs-load, NOT an initrd
+          # firmware gap; the runtime search path is the NixOS merged
+          # hardware.firmware env, which the kernel reaches via the
+          # firmware_class.path module param):
+          #
+          #   qcom_q6v5_pas 32300000.remoteproc: Direct firmware load for
+          #     qcom/x1e80100/LENOVO/83ED/cdsp_dtbs.elf failed with error -2
+          #   remoteproc remoteproc1: Failed to load program segments: -2
+          #
+          # The CDSP (Hexagon compute / DSP offload) then silently never
+          # starts; ADSP (audio) is unaffected. Fix by shipping the file via
+          # hardware.firmware, which lands in that merged env.
+          #
+          # Stopgap: reuse the T14s (21N1) cdsp_dtbs.elf. That blob is the
+          # CDSP firmware's own device-tree fragment (SoC-level resource
+          # description) and the T14s is the closest same-SoC Lenovo board,
+          # but every board does get its own adsp_dtbs.elf, so a real 83ED
+          # build may differ. Drop this override once Lenovo publishes the
+          # genuine 83ED cdsp_dtbs.elf upstream. Always emit the uncompressed
+          # file: depending on the nixpkgs snapshot, pkgs.linux-firmware
+          # ships either plain files or zstd-compressed ones, so handle both
+          # at build time.
+          hardware.firmware = lib.mkIf cfg.lenovo-yoga-slim7x.enable [
+            (pkgs.runCommand "x1e80100-yoga-slim7x-cdsp-dtb"
+              {
+                nativeBuildInputs = [ pkgs.zstd ];
+              }
+              ''
+                fwdir=${pkgs.linux-firmware}/lib/firmware/qcom/x1e80100/LENOVO/21N1
+                outdir=$out/lib/firmware/qcom/x1e80100/LENOVO/83ED
+                mkdir -p $outdir
+                if [ -e "$fwdir/cdsp_dtbs.elf.zst" ]; then
+                  zstd -dc "$fwdir/cdsp_dtbs.elf.zst" > $outdir/cdsp_dtbs.elf
+                else
+                  install -m 0444 "$fwdir/cdsp_dtbs.elf" $outdir/cdsp_dtbs.elf
+                fi
+              '')
+          ];
+
           # Point libcamera at the ov02c10 IPA tuning file for the webcam sensor.
           # This is mainly to remove green tint, but can be tweaked further.
           environment.sessionVariables.LIBCAMERA_IPA_CONFIG_PATH = [
