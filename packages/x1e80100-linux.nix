@@ -49,6 +49,28 @@ linuxPackagesFor (buildLinux {
       patch = ./lenovo-yoga-slim7x-ec.patch;
     }
 
+    # PCIe link retention series (link_retain v3, Krishna Chaitanya Chundru,
+    # 2026-07, under review for 7.3; not merged upstream as of 2026-09).
+    # Cherry-picked into this kernel so that the bootloader-trained PCIe link
+    # (pcie6a NVMe on the Yoga Slim 7x) survives the qcom-pcie probe without
+    # PERST# toggling / PHY re-init, as a prerequisite for dropping the
+    # `clk_ignore_unused` boot param. See docs/removing-clk-pd-ignore-unused.md.
+    # Patches 2+3 were authored against a newer pcie-qcom.c (post-v6.19
+    # parse_perst/parse_ports refactoring) and were ported to v6.19; the port
+    # is documented in the patch header.
+    {
+      name = "PCI: qcom: link retention v3 (1/4): phy skip reset if already up";
+      patch = ./pcie-linkret-v3-1-phy-skip-reset.patch;
+    }
+    {
+      name = "PCI: qcom: link retention v3 (2+3/4, ported to 6.19): retain bootloader link";
+      patch = ./pcie-linkret-v3-2-3-ported-to-v6.19.patch;
+    }
+    {
+      name = "PCI: qcom: link retention v3 (4/4): enable for x1e80100";
+      patch = ./pcie-linkret-v3-4-x1e80100-enable.patch;
+    }
+
     {
       name = "drm/dpu: Add support for DSPP GC block to enable Gamma LUT capability";
       patch = fetchurl {

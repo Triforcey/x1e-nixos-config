@@ -1,0 +1,114 @@
+commit 0000000000000000000000000000000000000000
+Author: Krishna Chaitanya Chundru <krishna.chundru@oss.qualcomm.com>
+Date:   Thu Jul 9 06:47:16 2026 +0530
+
+    phy: qcom: qmp-pcie: Skip PHY reset if already up
+
+    Link retention series v3 patch 1/4. Applied upstream as commit
+    910b828b22b7b91054b3bd4be676a017444b0e00 (vinod's phy tree, 2026-07-20).
+    From: https://marc.info/?l=linux-kernel&m=178357907797392&q=raw
+    (lore message-id 20260709-link_retain-v3-1-81a9d187bb61@oss.qualcomm.com)
+
+If the bootloader has already powered up the PCIe PHY, performing a
+full reset and waiting for the PHY to come up again adds unnecessary
+delay during boot.
+
+Extend the existing skip_init handling by introducing a skip_reset
+condition. When skip_init is active and the PHY status indicates that
+the PHY is already operational, skip asserting and deasserting the
+no-csr reset while still enabling the required resources during
+power-on.
+
+This allows reusing the bootloader-initialized PHY state and avoids
+redundant PHY reinitialization and PCIe link retraining, which can
+add hundred's of milliseconds of delay.
+
+This relies on the assumption that when skip_init is enabled and the
+PHY is reported as up, the bootloader has already configured the PHY
+correctly and the link is in a usable state.
+
+Reviewed-by: Abel Vesa <abel.vesa@oss.qualcomm.com>
+Reviewed-by: Konrad Dybcio <konrad.dybcio@oss.qualcomm.com>
+Tested-by: Qiang Yu <qiang.yu@oss.qualcomm.com>
+Signed-off-by: Krishna Chaitanya Chundru <krishna.chundru@oss.qualcomm.com>
+---
+ drivers/phy/qualcomm/phy-qcom-qmp-pcie.c | 31 +++++++++++++++++++++----------
+ 1 file changed, 21 insertions(+), 10 deletions(-)
+
+diff --git a/drivers/phy/qualcomm/phy-qcom-qmp-pcie.c b/drivers/phy/qualcomm/phy-qcom-qmp-pcie.c
+index d3effad7a074..49e10151cb1e 100644
+--- a/drivers/phy/qualcomm/phy-qcom-qmp-pcie.c
++++ b/drivers/phy/qualcomm/phy-qcom-qmp-pcie.c
+@@ -4862,6 +4862,7 @@ static int qmp_pcie_init(struct phy *phy)
+ 	struct qmp_pcie *qmp = phy_get_drvdata(phy);
+ 	const struct qmp_phy_cfg *cfg = qmp->cfg;
+ 	void __iomem *pcs = qmp->pcs;
++	bool skip_reset;
+ 	int ret;
+ 
+ 	/*
+@@ -4877,6 +4878,9 @@ static int qmp_pcie_init(struct phy *phy)
+ 		qphy_checkbits(pcs, cfg->regs[QPHY_START_CTRL], SERDES_START | PCS_START) &&
+ 		qphy_checkbits(pcs, cfg->regs[QPHY_PCS_POWER_DOWN_CONTROL], cfg->pwrdn_ctrl);
+ 
++	skip_reset = qmp->skip_init && !qphy_checkbits(pcs, cfg->regs[QPHY_PCS_STATUS],
++							    cfg->phy_status);
++
+ 	if (!qmp->skip_init && !cfg->tbls.serdes_num) {
+ 		dev_err(qmp->dev, "Init sequence not available\n");
+ 		return -ENODATA;
+@@ -4900,13 +4904,15 @@ static int qmp_pcie_init(struct phy *phy)
+ 		}
+ 	}
+ 
+-	ret = reset_control_assert(qmp->nocsr_reset);
+-	if (ret) {
+-		dev_err(qmp->dev, "no-csr reset assert failed\n");
+-		goto err_assert_reset;
+-	}
++	if (!skip_reset) {
++		ret = reset_control_assert(qmp->nocsr_reset);
++		if (ret) {
++			dev_err(qmp->dev, "no-csr reset assert failed\n");
++			goto err_assert_reset;
++		}
+ 
+-	usleep_range(200, 300);
++		usleep_range(200, 300);
++	}
+ 
+ 	if (!qmp->skip_init) {
+ 		ret = reset_control_bulk_deassert(cfg->num_resets, qmp->resets);
+@@ -4956,8 +4962,11 @@ static int qmp_pcie_power_on(struct phy *phy)
+ 	void __iomem *pcs = qmp->pcs;
+ 	void __iomem *status;
+ 	unsigned int mask, val;
++	bool skip_reset;
+ 	int ret;
+ 
++	skip_reset = qmp->skip_init && !qphy_checkbits(pcs, cfg->regs[QPHY_PCS_STATUS],
++							    cfg->phy_status);
+ 	/*
+ 	 * Write CSR register for PHY that doesn't support no_csr reset or has not
+ 	 * been initialized.
+@@ -4981,10 +4990,12 @@ static int qmp_pcie_power_on(struct phy *phy)
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = reset_control_deassert(qmp->nocsr_reset);
+-	if (ret) {
+-		dev_err(qmp->dev, "no-csr reset deassert failed\n");
+-		goto err_disable_pipe_clk;
++	if (!skip_reset) {
++		ret = reset_control_deassert(qmp->nocsr_reset);
++		if (ret) {
++			dev_err(qmp->dev, "no-csr reset deassert failed\n");
++			goto err_disable_pipe_clk;
++		}
+ 	}
+ 
+ 	if (qmp->skip_init)
+
+-- 
+2.34.1
+
