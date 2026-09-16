@@ -33,6 +33,32 @@ one-commit `git revert` if a boot regresses.
 and the `genpd_summary` power measurement vs the with-params baseline
 (the ~2-4 W claim).
 
+### Known follow-up: gcc/gpucc sync_state blocked by the driverless GMU
+
+After iris binding unblocked video_cc/rpmhpd/interconnects
+(2026-09-16), `gcc` and `gpucc` remain `state_synced=0`:
+`sync_state() pending due to 3d6a000.gmu`. The GMU DT node
+(`qcom,adreno-gmu-x185.1`) has **no driver by design** in mainline (the
+adreno GPU driver consumes the node directly), so fw_devlink never sees
+it probe and gcc/gpucc keep their preserved boot state indefinitely -
+equivalent to `clk_ignore_unused` scoped to those two providers.
+
+Upstream's `fw_devlink.sync_state=timeout` boot param (drivers/base/core.c)
+looks tempting but is **unsafe here**: it forces sync_state from
+`fw_devlink_probing_done()` at the end of kernel init - before NixOS
+stage-1 udev loads the PCIe/DPU modules - which re-creates the original
+late-init failure mode (display dies before the LUKS prompt).
+
+Candidate fixes, in order of preference:
+1. Upstream: fw_devlink handling for consumers that will never probe
+   (fire sync_state only after the *last module load* / at an explicit
+   userspace-triggered point).
+2. Local: a minimal stub platform driver matching
+   `qcom,adreno-gmu-x185.1` (bind, return 0) so the consumer completes
+   probing; the adreno driver reads the GMU node via of_parse and does
+   not require it to be driverless. Needs verification that binding the
+   node does not interfere with a7xx bring-up.
+
 ## Why the params exist
 
 At `late_initcall`, the common clock framework (`clk_disable_unused`) turns
