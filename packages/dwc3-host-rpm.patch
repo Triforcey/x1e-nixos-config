@@ -1,0 +1,50 @@
+From 3a83e8bc4903a1629bfb4c6eb9c9e539242a5c45 Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Wed, 16 Sep 2026 09:36:03 -0600
+Subject: [PATCH] usb: dwc3: allow runtime PM for host-mode controllers
+
+dwc3_core_probe() enables runtime PM with a 5 s autosuspend delay and
+then immediately calls pm_runtime_forbid(), which is never lifted for
+host mode - the controller stays awake permanently and, through its
+power domains and bandwidth votes, keeps the whole USB subsystem (and
+everything downstream of it) out of low-power states.
+
+The runtime callbacks (dwc3_runtime_suspend/resume) fully exist and
+already handle state save/restore and PHY coordination through the
+glue drivers, so host-mode controllers can safely autosuspend. Drop
+the forbid once the role is known: host mode gets pm_runtime_allow(),
+gadget mode keeps it until its UDC lifecycle is runtime-PM aware.
+
+Experiment-verified on X1E80100 (Yoga Slim 7x) via sysfs
+pm_runtime_allow on the glue devices before this commit; kernel-side
+verification pending.
+---
+ drivers/usb/dwc3/core.c | 12 ++++++++++++
+ 1 file changed, 12 insertions(+)
+
+diff --git a/drivers/usb/dwc3/core.c b/drivers/usb/dwc3/core.c
+index ceb49f2f8..7884421bc 100644
+--- a/drivers/usb/dwc3/core.c
++++ b/drivers/usb/dwc3/core.c
+@@ -2348,6 +2348,18 @@ int dwc3_core_probe(const struct dwc3_probe_data *data)
+ 			goto err_exit_debugfs;
+ 	}
+ 
++	/*
++	 * Host-mode controllers can safely runtime-suspend: the runtime
++	 * callbacks save/restore controller state and coordinate the PHYs
++	 * via the glue drivers, and wakeup interrupts keep device
++	 * attach/removal alive. Drop the probe-time forbid so the
++	 * controller autosuspends after the configured idle delay; gadget
++	 * mode keeps the forbid until its UDC lifecycle is runtime-PM
++	 * aware.
++	 */
++	if (dwc->current_dr_role == DWC3_GCTL_PRTCAP_HOST)
++		pm_runtime_allow(dev);
++
+ 	pm_runtime_put(dev);
+ 
+ 	dma_set_max_seg_size(dev, UINT_MAX);
+-- 
+2.55.0
+

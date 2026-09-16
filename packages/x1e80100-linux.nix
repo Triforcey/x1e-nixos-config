@@ -176,6 +176,18 @@ linuxPackagesFor (buildLinux {
       patch = ./gmu-stub.patch;
     }
 
+    # EXPERIMENTAL (2026-09-16), NOT ENABLED: USB host-mode runtime PM.
+    # dwc3_core_probe() pm_runtime_forbid()s the controller and never
+    # lifts it, so the USB tree never autosuspends. This patch allows
+    # runtime PM once the role resolves to host. Gated on the live sysfs
+    # experiment passing: echo auto on the three *.usb devices and three
+    # xhci-hcd.* children, verify they suspend AND that USB wake works
+    # (plug a device, check it enumerates). Uncomment to include.
+    # {
+    #   name = "usb: dwc3: allow runtime PM for host-mode controllers";
+    #   patch = ./dwc3-host-rpm.patch;
+    # }
+
     # EC: DTS node only — the driver is mainline on 7.2 (EC_QCOM_HAMOA,
     # binds "qcom,hamoa-crd-ec", proven on fertile-forge via the EC
     # overlay).
