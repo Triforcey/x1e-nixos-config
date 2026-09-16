@@ -33,7 +33,40 @@ one-commit `git revert` if a boot regresses.
 and the `genpd_summary` power measurement vs the with-params baseline
 (the ~2-4 W claim).
 
-### Known follow-up: gcc/gpucc sync_state blocked by the driverless GMU
+### Final state (2026-09-16): sync_state complete, 7/7 providers
+
+The last two blockers were also removed:
+
+- **`qcom_iris` was blacklisted** in this module (upstream "too buggy"
+  comment, written against 6.x). Un-blacklisted: kmod honors blacklists
+  on every autoload path — which is why manual modprobe worked while
+  boot-time loading never did. The module now loads at boot via
+  `boot.kernelModules` and binds via the sm8550 fallback compatible.
+  V4L2 M2M decoder/encoder nodes exist.
+- **The driverless GMU node** got a bind-only stub driver
+  (`packages/gmu-stub.patch`), registered via the adreno driver hooks
+  (a first attempt with module_platform_driver collided with msm_drv.o
+  in the single msm module — see git history).
+
+Result at idle (fertile-forge, kernel 7.2.0, cmdline still flag-free):
+
+- **All seven providers `state_synced=1`**: gcc, gpucc, video_cc,
+  rpmhpd, and the three qnoc interconnects. Zero pending sync_states.
+- **28 platform devices runtime-suspended at idle**, including the
+  GPU, the GMU itself, the iris codec, the RPMh resource controller, an
+  SMMU, all three DP controllers, four audio codecs, two SoundWire
+  links and the camera ISP/CCI.
+- Settled idle draw: **5.82 W** (5.03–7.11 W over 12 samples) vs
+  6.78 W measured mid-migration and a 5–7 W with-params baseline. The
+  ~1 W delta vs baseline is smaller than the 2–4 W projection because
+  the remaining draw is peripheral runtime-PM holds (USB controllers,
+  NVMe, WiFi — all runtime-active), which the next work items target.
+
+### RESOLVED (was): gcc/gpucc sync_state blocked by the driverless GMU
+
+Superseded by the GMU stub driver (2026-09-16). The analysis below is
+kept because it documents why `fw_devlink.sync_state=timeout` would be
+unsafe on this platform:
 
 After iris binding unblocked video_cc/rpmhpd/interconnects
 (2026-09-16), `gcc` and `gpucc` remain `state_synced=0`:
