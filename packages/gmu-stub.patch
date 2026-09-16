@@ -1,0 +1,96 @@
+From ab23446cc4c76115cc0a618ac8a28b60c5d30f83 Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Wed, 16 Sep 2026 06:18:47 -0600
+Subject: [PATCH] drm/msm/adreno: Add a GMU stub driver for X1E80100
+
+The Adreno GMU device tree node has no platform driver in mainline: the
+a7xx GPU driver consumes the node directly via of_parse_phandle()
+(a6xx_gmu_parse_dt()) and takes a device reference with
+of_find_device_by_node() for its register/irq/clock lookups. Without a
+driver, fw_devlink never considers the node probed, which keeps the
+GCC/GPUCC sync_state() callbacks from firing - leaving the
+bootloader-enabled clocks (and the power domains and interconnect
+bandwidth downstream of them) on indefinitely.
+
+A trivial stub marks the device probed so the deferred sync_state
+cleanup can run. The GPU driver reads the GMU node through
+of_parse_phandle() and does not depend on it being driverless.
+
+Combined with the PCIe link-retention series and the GCC sync_state
+patch this removes the last structural blocker for dropping
+clk_ignore_unused / pd_ignore_unused on X1E80100.
+
+X1E80100 (qcom,adreno-gmu-x185.1) only; other SoCs keep version-specific
+compatibles and can be added after per-board verification.
+---
+ drivers/gpu/drm/msm/Makefile          |  1 +
+ drivers/gpu/drm/msm/adreno/gmu-stub.c | 45 +++++++++++++++++++++++++++
+ 2 files changed, 46 insertions(+)
+ create mode 100644 drivers/gpu/drm/msm/adreno/gmu-stub.c
+
+diff --git a/drivers/gpu/drm/msm/Makefile b/drivers/gpu/drm/msm/Makefile
+index d0c3a4c67..6d698d03d 100644
+--- a/drivers/gpu/drm/msm/Makefile
++++ b/drivers/gpu/drm/msm/Makefile
+@@ -22,6 +22,7 @@ adreno-y := \
+ 	adreno/a6xx_catalog.o \
+ 	adreno/a6xx_gpu.o \
+ 	adreno/a6xx_gmu.o \
++	adreno/gmu-stub.o \
+ 	adreno/a6xx_hfi.o \
+ 	adreno/a6xx_preempt.o \
+ 	adreno/a8xx_gpu.o \
+diff --git a/drivers/gpu/drm/msm/adreno/gmu-stub.c b/drivers/gpu/drm/msm/adreno/gmu-stub.c
+new file mode 100644
+index 000000000..70cef8739
+--- /dev/null
++++ b/drivers/gpu/drm/msm/adreno/gmu-stub.c
+@@ -0,0 +1,45 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Adreno GMU boot-state preservation stub.
++ *
++ * The Adreno GMU device tree node has no platform driver in mainline: the
++ * a7xx GPU driver consumes the node directly via of_parse_phandle()
++ * (a6xx_gmu_parse_dt()) and takes a device reference with
++ * of_find_device_by_node() for its register/irq/clock lookups. Without a
++ * driver, fw_devlink never considers the node probed, which keeps the
++ * GCC/GPUCC sync_state() callbacks from firing - leaving the
++ * bootloader-enabled clocks (and the power domains and interconnect
++ * bandwidth downstream of them) on indefinitely.
++ *
++ * A trivial stub marks the device probed so the deferred sync_state
++ * cleanup can run. The GPU driver does not depend on the node being
++ * driverless; its lookups go through the device, which exists either way.
++ */
++
++#include <linux/module.h>
++#include <linux/of.h>
++#include <linux/platform_device.h>
++
++static int adreno_gmu_stub_probe(struct platform_device *pdev)
++{
++	return 0;
++}
++
++static const struct of_device_id adreno_gmu_stub_match[] = {
++	/* X1E80100 (Oryon / a740, GMU v4.x) */
++	{ .compatible = "qcom,adreno-gmu-x185.1" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, adreno_gmu_stub_match);
++
++static struct platform_driver adreno_gmu_stub_driver = {
++	.probe = adreno_gmu_stub_probe,
++	.driver = {
++		.name = "adreno-gmu-stub",
++		.of_match_table = adreno_gmu_stub_match,
++	},
++};
++module_platform_driver(adreno_gmu_stub_driver);
++
++MODULE_DESCRIPTION("Stub driver for the Adreno GMU node (fw_devlink sync_state unblock)");
++MODULE_LICENSE("GPL");
+-- 
+2.55.0
+

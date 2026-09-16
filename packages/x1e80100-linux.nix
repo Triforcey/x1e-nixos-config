@@ -166,6 +166,16 @@ linuxPackagesFor (buildLinux {
       patch = ./gcc-sync-state.patch;
     }
 
+    # The GMU DT node has no driver upstream (the a7xx GPU driver consumes
+    # the node via of_parse_phandle), so fw_devlink never counts it probed
+    # and gcc/gpucc sync_state stays pending forever - keeping their
+    # preserved boot clock state on. A bind-only stub completes the
+    # consumer set and lets the deferred cleanup run.
+    {
+      name = "drm/msm/adreno: Add a GMU stub driver for X1E80100";
+      patch = ./gmu-stub.patch;
+    }
+
     # EC: DTS node only — the driver is mainline on 7.2 (EC_QCOM_HAMOA,
     # binds "qcom,hamoa-crd-ec", proven on fertile-forge via the EC
     # overlay).
