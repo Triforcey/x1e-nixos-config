@@ -33,10 +33,16 @@ in
           # around this by explicitly disabling TPM.
           systemd.tpm2.enable = false;
 
-          boot.blacklistedKernelModules = [
-            # Too buggy right now, too many kernel crashes.
-            "qcom_iris"
-          ];
+          # qcom_iris was blacklisted upstream ("too buggy right now, too
+          # many kernel crashes" — written against the 6.x-era iris
+          # driver). On the 7.2 kernel it binds cleanly via the sm8550
+          # fallback compatible and is REQUIRED: without it the
+          # video-codec consumer never probes, and gcc/gpucc, the qnoc
+          # interconnects, video_cc and rpmhpd keep their boot-preserved
+          # state indefinitely (see
+          # docs/removing-clk-pd-ignore-unused.md). Binding verified
+          # 2026-09-16 on the Yoga Slim 7x (V4L2 M2M decoder/encoder
+          # nodes appeared, sync_state chain fired).
 
           boot.initrd.includeDefaultModules = false;
           boot.initrd.systemd.tpm2.enable = false; # This also pulls in some modules our kernel is not build with.
