@@ -94,14 +94,16 @@ in
 
           boot.kernelParams = lib.mkMerge [
             [
-              # pd_ignore_unused / clk_ignore_unused were removed 2026-09-15:
-              # this kernel carries the PCIe link-retention series (v3) and
-              # the device tree claims the TCSR clkrefs, so the late-init
-              # clock/genpd cleanup no longer kills the bootloader-trained
-              # links. Retention verified on hardware (pcie4, "Retaining
-              # PCIe link", slim7x boot log; pcie6a retrained instead —
-              # NVMe unaffected). If a boot regresses (panel through stage
-              # 1, USB-C/DP, PCIe, audio), restore these two params — see
+              # pd_ignore_unused / clk_ignore_unused were removed 2026-09-15
+              # and boot-verified on the Yoga Slim 7x (fertile-forge): the
+              # kernel carries the PCIe link-retention series (v3) plus the
+              # GCC sync_state patch below, so the late-init cleanup no
+              # longer kills the bootloader-trained links — "Retaining PCIe
+              # link" logged on BOTH pcie6a (NVMe) and pcie4 (WiFi), display
+              # and all devices up, zero faults. Verified for the slim7x
+              # only; T14s/ISO boots on this branch run without these params
+              # unverified. If a boot regresses (panel through stage 1,
+              # USB-C/DP, PCIe, audio), restore these two params — see
               # docs/removing-clk-pd-ignore-unused.md.
 
               # Linux local privilege escalation using algif_aead:

@@ -1,8 +1,37 @@
 # Dropping `pd_ignore_unused` / `clk_ignore_unused`
 
-This documents why the two boot params exist on X1E80100, what state our
-kernel is in today, and the exact procedure to boot-test removing them on a
-Yoga Slim 7x (or T14s) before making the removal permanent.
+This documents why the two boot params existed on X1E80100, what state our
+kernel is in today, and the exact procedure used to boot-test removing them.
+
+## STATUS: REMOVED and boot-verified (2026-09-15, Yoga Slim 7x)
+
+The params are gone from this branch. The removal rides on two kernel
+changes carried in `x1e80100-linux`:
+
+1. The PCIe link-retention series (v3, cherry-picked): the
+   bootloader-trained links survive qcom-pcie probe without PERST# /
+   retraining — `Retaining PCIe link` logged on **both** pcie6a (NVMe)
+   and pcie4 (WiFi).
+2. The GCC sync_state patch (`packages/gcc-sync-state.patch`): the
+   bootloader-enabled GCC clocks are preserved through `late_init` —
+   closing the probe-deferral gap that boot-looped the first removal
+   attempt (stage-1 hang, SBSA watchdog resetting every 10 min) — and
+   the still-unclaimed clocks are gated from the driver's sync_state
+   callback once all DT consumers have probed.
+
+Boot-test evidence (fertile-forge, kernel 7.2.0, cmdline without either
+flag): display clean through stage 1 and the desktop (after the
+separately-documented initrd zap-shader firmware fix), all three PCIe
+devices up, EC/ADSP/CDSP up, audio + WiFi working, zero SMMU faults and
+zero GPU/DPU errors in the journal.
+
+**Scope caveat**: verified on the Yoga Slim 7x only. T14s and ISO boots
+on this branch run without the params unverified — the revert is a
+one-commit `git revert` if a boot regresses.
+
+**Remaining validation**: soak time, suspend/resume, USB-C/DP altmode,
+and the `genpd_summary` power measurement vs the with-params baseline
+(the ~2-4 W claim).
 
 ## Why the params exist
 
@@ -103,15 +132,21 @@ Run all of these with and without the params and diff:
 7. **Stability**: leave the machine idle 15+ minutes, then suspend/resume
    once (`systemctl suspend`), then re-check 2-5.
 
-## What still blocks permanent removal
+## Follow-up validation (was: what still blocks permanent removal)
 
-- Boot-test evidence from step A/B (this is hardware work; cannot be done
-  from the build host).
-- The upstream probe-deferral / clk sync-state fix, tracked as part of the
-  `link_retain` series review (v3 cover letter, 2026-07: "Once it is resolved
-  we can avoid those kernel command line arguments"). When 7.3 lands with
-  that work, re-evaluate — upstream dropping the params on `main` is the
-  signal to follow (see the comment in `modules/x1e80100.nix`).
+The removal itself is no longer blocked — sync_state was the missing
+piece (absent in the qcom clock drivers as of v7.2 and linux-next;
+`packages/gcc-sync-state.patch` implements it for the GCC provider).
+Still open:
+
+- The validation checklist above (soak, suspend/resume, USB-C/DP,
+  power measurement).
+- T14s / ISO boots without the params (untested).
+- Upstreaming `packages/gcc-sync-state.patch` — it is candidate material
+  for the "clk sync-state" work the `link_retain` series author named as
+  the exit condition; when 7.3 lands with an upstream equivalent,
+  rebase onto it and drop ours (see the comment in
+  `modules/x1e80100.nix`).
 
 ## Why the patches cannot ride on the stock kernel without a rebuild
 
