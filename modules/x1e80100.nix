@@ -94,15 +94,55 @@ in
 
           boot.kernelParams = lib.mkMerge [
             [
-              # pd_ignore_unused / clk_ignore_unused were removed 2026-09-15:
-              # this kernel carries the PCIe link-retention series (v3) and
-              # the device tree claims the TCSR clkrefs, so the late-init
-              # clock/genpd cleanup no longer kills the bootloader-trained
-              # links. Retention verified on hardware (pcie4, "Retaining
-              # PCIe link", slim7x boot log; pcie6a retrained instead —
-              # NVMe unaffected). If a boot regresses (panel through stage
-              # 1, USB-C/DP, PCIe, audio), restore these two params — see
-              # docs/removing-clk-pd-ignore-unused.md.
+              # Keep power domains / clocks that the kernel considers unused
+              # always-on. Still required as of 2026-09:
+              #
+              # - Upstream (kuruczgy/x1e-nixos-config) still ships both on
+              #   main, including after "Switch to latest upstream kernel"
+              #   (14f28d2), and has never dropped them on any branch.
+              #
+              # - The aarch64-laptops distro integration guide still
+              #   recommends both: some clocks and power domains may be
+              #   modelled incorrectly, so late-init clk_disable_unused /
+              #   genpd cleanup can power off hardware needed for display,
+              #   USB-C, or PCIe right after the console goes quiet.
+              #
+              # - Making removal safe is upstream work in progress: explicit
+              #   TCSR USB/PCIe PHY clock-reference claims in the x1e80100
+              #   DTs (per-board), and the PCIe link retention series
+              #   (link_retain v3, under review for 7.3, not merged as of
+              #   2026-09). Recent upstream issue #177 (T14s screen off
+              #   during boot, Oct 2025) shows late-boot display fragility
+              #   persists even with these params present.
+              #
+              # State on our side (x1e80100-linux kernel, 2026-09):
+              #   - The per-board clock-tree fixes are already in: the v6.19
+              #     hamoa.dtsi carries the TCSR clkref wiring for PCIe/USB
+              #     PHYs, and our Linaro cherry-pick range adds the DP PHY
+              #     TCSR ref clock (0462f37e) and the USB SS1/SS2 ref clock
+              #     fixes (3194ae5b).
+              #   - GENPD no longer turns off needed power domains with the
+              #     latest kernel (per the link_retain v2 cover letter), so
+              #     pd_ignore_unused is likely the cheaper of the two to
+              #     test-dropping first.
+              #   - The PCIe link retention series (link_retain v3) is now
+              #     cherry-picked into x1e80100-linux (patches 2+3 ported to
+              #     6.19; see packages/pcie-linkret-v3-*). This makes the
+              #     bootloader-trained NVMe link (pcie6a) survive probe, but
+              #     does NOT yet cover the probe-deferral gap: qcom-pcie can
+              #     still probe after late_init, and unclaimed clocks get
+              #     gated by clk_disable_unused before the driver votes. That
+              #     upstream fix (clk sync-state / probe ordering) is what
+              #     finally makes clk_ignore_unused removable.
+              #
+              # Cost of keeping them is ~2-4W idle. Remove only after
+              # boot-testing without them on real hardware (panel through
+              # stage 1, USB-C / DP altmode, PCIe, audio) — procedure in
+              # docs/removing-clk-pd-ignore-unused.md. Cannot be verified
+              # remotely, so re-evaluate when 7.3 DTs land and upstream
+              # drops the params first.
+              "pd_ignore_unused"
+              "clk_ignore_unused"
 
               # Linux local privilege escalation using algif_aead:
               # https://copy.fail/
