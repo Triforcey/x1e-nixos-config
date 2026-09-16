@@ -203,14 +203,10 @@ linuxPackagesFor (buildLinux {
       # See: https://gitlab.com/Linaro/arm64-laptops/linux/-/issues/9
       patch = ./lenovo-yoga-slim7x-camera-regulators-fix.patch;
     }
-    {
-      # Based on:
-      # https://github.com/alexVinarskis/linux-x1e80100-zenbook-a14/pull/1
-      # Apparently this option should be interpreted by userspace, so rotating
-      # in the kernel should not be needed.
-      name = "rotation = <180>;";
-      patch = ./lenovo-yoga-slim7x-camera-rotation.patch;
-    }
+    # The camera sensor's rotation is left unset: the native readout is
+    # upright on this panel mounting, and libcamera treats a missing/0
+    # rotation as no transform. A rotation=<180> patch was tried and
+    # produced upside-down frames (see x1e-yoga-book-porting.md).
 
     # Gamma LUT / DSPP GC: the old 6.19-era patch (gamma-lut.patch) is gone
     # for good — the feature was merged mainline between 6.19 and 7.2
