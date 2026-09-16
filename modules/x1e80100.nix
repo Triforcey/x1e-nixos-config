@@ -200,6 +200,30 @@ in
               "qcom/x1e80100/adsp.mbn"
               "qcom/x1e80100/adsp_dtb.mbn"
             ])
+
+            (lib.mkIf cfg.lenovo-yoga-slim7x.enable [
+              # Same set as the T14s above, for the slim7x board paths. The
+              # slim7x DTB (via the Linaro cherry-picks) overrides the GPU
+              # zap-shader firmware-name to the per-board
+              # qcom/x1e80100/LENOVO/83ED/qcdxkmsuc8380.mbn; without it in
+              # the initrd the GPU half-initializes in stage 1 (SQE+GMU
+              # load, then "Unable to load ... qcdxkmsuc8380.mbn" -2, "gpu
+              # hw init failed"), and the display renders recognizable but
+              # corrupted frames (observed 2026-09-15 on the first 7.2
+              # flake-kernel boot of fertile-forge).
+              "qcom/x1e80100/LENOVO/83ED/cdspr.jsn"
+              "qcom/x1e80100/LENOVO/83ED/qcadsp8380.mbn"
+              "qcom/x1e80100/LENOVO/83ED/adspua.jsn"
+              "qcom/x1e80100/LENOVO/83ED/battmgr.jsn"
+              "qcom/x1e80100/LENOVO/83ED/adsps.jsn"
+              "qcom/x1e80100/LENOVO/83ED/qcdxkmsuc8380.mbn"
+              "qcom/x1e80100/LENOVO/83ED/qccdsp8380.mbn"
+              "qcom/x1e80100/LENOVO/83ED/adspr.jsn"
+              "qcom/x1e80100/LENOVO/83ED/adsp_dtbs.elf"
+              "qcom/x1e80100/LENOVO/83ED/cdsp_dtbs.elf"
+              "qcom/x1e80100/adsp.mbn"
+              "qcom/x1e80100/adsp_dtb.mbn"
+            ])
           ];
 
           # Upstream linux-firmware (still true in the 20260810 snapshot used
