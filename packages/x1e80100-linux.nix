@@ -154,6 +154,18 @@ linuxPackagesFor (buildLinux {
       patch = ./pcie-linkret-v3-4-x1e80100-enable.patch;
     }
 
+    # Keep the bootloader-enabled GCC clocks alive until all their DT
+    # consumers have probed (fw_devlink sync_state), then gate the
+    # still-unclaimed ones via the driver's sync_state callback. Combined
+    # with the link retention series this replaces the
+    # clk_ignore_unused / pd_ignore_unused boot params. Our own patch —
+    # the qcom clock drivers have no sync_state support upstream (checked
+    # v7.2 and linux-next 2026-09-15); candidate for upstream submission.
+    {
+      name = "clk: qcom: gcc: Preserve the boot clock state until sync_state";
+      patch = ./gcc-sync-state.patch;
+    }
+
     # EC: DTS node only — the driver is mainline on 7.2 (EC_QCOM_HAMOA,
     # binds "qcom,hamoa-crd-ec", proven on fertile-forge via the EC
     # overlay).

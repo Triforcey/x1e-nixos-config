@@ -1,0 +1,246 @@
+From 64f9c96e452d0f0515410cf4ba5f0daf6885f3fc Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Tue, 15 Sep 2026 21:00:58 -0600
+Subject: [PATCH] clk: qcom: gcc: Preserve the boot clock state until
+ sync_state
+
+X1E80100 boards boot with the bootloader having enabled and trained the
+PCIe links and the display pipeline. The qcom clock drivers do not
+implement sync_state, so clk_disable_unused() at late_init gates the
+still-unclaimed GCC clocks before the PCIe and display drivers probe,
+killing the bootloader-trained links and breaking the early display.
+This is why the distro integration guides carry clk_ignore_unused.
+
+Add provider-level opt-in preservation:
+
+- clk_hw_preserve_boot_state(): mark a clock to be skipped by the
+  late-init unused-clock cleanup (preserving the boot state).
+- clk_hw_sync_state_disable_unused(): perform the deferred cleanup for
+  a subtree - gate clocks that are hardware-enabled but have no
+  consumer votes once the provider's sync_state fired (all DT
+  consumers have probed). CLK_IS_CRITICAL and in-use clocks are
+  respected as in the late-init walk.
+- struct qcom_cc_desc.preserve_boot_state + qcom_cc_sync_state(): wire
+  the above into the qcom clock controller probe/sync_state flow.
+
+gcc-x1e80100 opts in. Combined with the PCIe link-retention series this
+lets X1E80100 boards drop the clk_ignore_unused and pd_ignore_unused
+kernel command line arguments.
+---
+ drivers/clk/clk.c               | 48 ++++++++++++++++++++++++++++++---
+ drivers/clk/qcom/common.c       | 40 +++++++++++++++++++++++++++
+ drivers/clk/qcom/common.h       |  2 ++
+ drivers/clk/qcom/gcc-x1e80100.c |  2 ++
+ include/linux/clk-provider.h    |  2 ++
+ 5 files changed, 90 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/clk/clk.c b/drivers/clk/clk.c
+index 048adfa86..04d5967e8 100644
+--- a/drivers/clk/clk.c
++++ b/drivers/clk/clk.c
+@@ -69,6 +69,7 @@ struct clk_core {
+ 	struct clk_hw		*hw;
+ 	struct module		*owner;
+ 	struct device		*dev;
++	bool			preserve_boot_state;
+ 	struct hlist_node	rpm_node;
+ 	struct device_node	*of_node;
+ 	struct clk_core		*parent;
+@@ -1467,7 +1468,8 @@ static void __init clk_unprepare_unused_subtree(struct clk_core *core)
+ 	}
+ }
+ 
+-static void __init clk_disable_unused_subtree(struct clk_core *core)
++static void clk_disable_unused_subtree(struct clk_core *core,
++				       bool check_preserved)
+ {
+ 	struct clk_core *child;
+ 	unsigned long flags;
+@@ -1475,7 +1477,7 @@ static void __init clk_disable_unused_subtree(struct clk_core *core)
+ 	lockdep_assert_held(&prepare_lock);
+ 
+ 	hlist_for_each_entry(child, &core->children, child_node)
+-		clk_disable_unused_subtree(child);
++		clk_disable_unused_subtree(child, check_preserved);
+ 
+ 	if (core->flags & CLK_OPS_PARENT_ENABLE)
+ 		clk_core_prepare_enable(core->parent);
+@@ -1485,6 +1487,9 @@ static void __init clk_disable_unused_subtree(struct clk_core *core)
+ 	if (core->enable_count)
+ 		goto unlock_out;
+ 
++	if (check_preserved && core->preserve_boot_state)
++		goto unlock_out;
++
+ 	if (core->flags & CLK_IGNORE_UNUSED)
+ 		goto unlock_out;
+ 
+@@ -1538,10 +1543,10 @@ static int __init clk_disable_unused(void)
+ 	clk_prepare_lock();
+ 
+ 	hlist_for_each_entry(core, &clk_root_list, child_node)
+-		clk_disable_unused_subtree(core);
++		clk_disable_unused_subtree(core, true);
+ 
+ 	hlist_for_each_entry(core, &clk_orphan_list, child_node)
+-		clk_disable_unused_subtree(core);
++		clk_disable_unused_subtree(core, true);
+ 
+ 	hlist_for_each_entry(core, &clk_root_list, child_node)
+ 		clk_unprepare_unused_subtree(core);
+@@ -1557,6 +1562,41 @@ static int __init clk_disable_unused(void)
+ }
+ late_initcall_sync(clk_disable_unused);
+ 
++/**
++ * clk_hw_preserve_boot_state() - opt a clock out of the late-init
++ * unused-clock cleanup
++ * @hw: clock to preserve
++ *
++ * Clock providers whose firmware leaves clocks enabled at handoff and
++ * whose consumers probe after late_init (e.g. PCIe, display) call this
++ * from probe to keep the boot state until their sync_state callback
++ * runs, at which point the still-unclaimed clocks can be gated with
++ * clk_hw_sync_state_disable_unused().
++ */
++void clk_hw_preserve_boot_state(struct clk_hw *hw)
++{
++	clk_prepare_lock();
++	hw->core->preserve_boot_state = true;
++	clk_prepare_unlock();
++}
++EXPORT_SYMBOL_GPL(clk_hw_preserve_boot_state);
++
++/**
++ * clk_hw_sync_state_disable_unused() - gate clocks in this subtree that
++ * are hardware-enabled but have no consumer votes
++ * @hw: any clock of the subtree
++ *
++ * The counterpart to clk_hw_preserve_boot_state(): call from a clock
++ * provider's sync_state callback to release the preserved boot state.
++ */
++void clk_hw_sync_state_disable_unused(struct clk_hw *hw)
++{
++	clk_prepare_lock();
++	clk_disable_unused_subtree(hw->core, false);
++	clk_prepare_unlock();
++}
++EXPORT_SYMBOL_GPL(clk_hw_sync_state_disable_unused);
++
+ static int clk_core_determine_round_nolock(struct clk_core *core,
+ 					   struct clk_rate_request *req)
+ {
+diff --git a/drivers/clk/qcom/common.c b/drivers/clk/qcom/common.c
+index eec369d21..c053eaa3f 100644
+--- a/drivers/clk/qcom/common.c
++++ b/drivers/clk/qcom/common.c
+@@ -424,6 +424,20 @@ int qcom_cc_really_probe(struct device *dev,
+ 	if (ret)
+ 		goto put_rpm;
+ 
++	if (desc->preserve_boot_state) {
++		for (i = 0; i < num_clks; i++) {
++			if (!rclks[i])
++				continue;
++
++			clk_hw_preserve_boot_state(&rclks[i]->hw);
++		}
++
++		for (i = 0; i < num_clk_hws; i++)
++			clk_hw_preserve_boot_state(clk_hws[i]);
++
++		dev_set_drvdata(dev, cc);
++	}
++
+ 	ret = qcom_cc_icc_register(dev, desc);
+ 
+ put_rpm:
+@@ -434,6 +448,32 @@ int qcom_cc_really_probe(struct device *dev,
+ }
+ EXPORT_SYMBOL_GPL(qcom_cc_really_probe);
+ 
++/**
++ * qcom_cc_sync_state() - release the preserved boot clock state
++ * @pdev: the clock controller platform device
++ *
++ * Wire up as the .sync_state callback of the clock controller driver.
++ * Providers with &struct qcom_cc_desc.preserve_boot_state keep the
++ * firmware-enabled clocks on past late_init; this performs the deferred
++ * unused-clock cleanup once all consumers have probed.
++ */
++void qcom_cc_sync_state(struct platform_device *pdev)
++{
++	struct qcom_cc *cc = platform_get_drvdata(pdev);
++	int i;
++
++	if (!cc)
++		return;
++
++	for (i = 0; i < cc->num_rclks; i++) {
++		if (!cc->rclks[i])
++			continue;
++
++		clk_hw_sync_state_disable_unused(&cc->rclks[i]->hw);
++	}
++}
++EXPORT_SYMBOL_GPL(qcom_cc_sync_state);
++
+ int qcom_cc_probe(struct platform_device *pdev, const struct qcom_cc_desc *desc)
+ {
+ 	struct regmap *regmap;
+diff --git a/drivers/clk/qcom/common.h b/drivers/clk/qcom/common.h
+index 6f2406f88..731b3f5fe 100644
+--- a/drivers/clk/qcom/common.h
++++ b/drivers/clk/qcom/common.h
+@@ -49,6 +49,7 @@ struct qcom_cc_desc {
+ 	size_t num_icc_hws;
+ 	unsigned int icc_first_node_id;
+ 	bool use_rpm;
++	bool preserve_boot_state;
+ 	const struct qcom_cc_driver_data *driver_data;
+ };
+ 
+@@ -78,6 +79,7 @@ extern int qcom_find_cfg_index(struct clk_hw *hw, const struct parent_map *map,
+ extern int qcom_cc_register_board_clk(struct device *dev, const char *path,
+ 				      const char *name, unsigned long rate);
+ extern int qcom_cc_register_sleep_clk(struct device *dev);
++extern void qcom_cc_sync_state(struct platform_device *pdev);
+ 
+ extern struct regmap *qcom_cc_map(struct platform_device *pdev,
+ 				  const struct qcom_cc_desc *desc);
+diff --git a/drivers/clk/qcom/gcc-x1e80100.c b/drivers/clk/qcom/gcc-x1e80100.c
+index 8c146d62c..dfdda4305 100644
+--- a/drivers/clk/qcom/gcc-x1e80100.c
++++ b/drivers/clk/qcom/gcc-x1e80100.c
+@@ -7449,6 +7449,7 @@ static const struct qcom_cc_desc gcc_x1e80100_desc = {
+ 	.num_resets = ARRAY_SIZE(gcc_x1e80100_resets),
+ 	.gdscs = gcc_x1e80100_gdscs,
+ 	.num_gdscs = ARRAY_SIZE(gcc_x1e80100_gdscs),
++	.preserve_boot_state = true,
+ };
+ 
+ static const struct of_device_id gcc_x1e80100_match_table[] = {
+@@ -7496,6 +7497,7 @@ static struct platform_driver gcc_x1e80100_driver = {
+ 	.driver = {
+ 		.name = "gcc-x1e80100",
+ 		.of_match_table = gcc_x1e80100_match_table,
++		.sync_state = qcom_cc_sync_state,
+ 	},
+ };
+ 
+diff --git a/include/linux/clk-provider.h b/include/linux/clk-provider.h
+index b01a38fef..fa46b3ca4 100644
+--- a/include/linux/clk-provider.h
++++ b/include/linux/clk-provider.h
+@@ -1414,6 +1414,8 @@ int clk_hw_set_parent(struct clk_hw *hw, struct clk_hw *new_parent);
+ unsigned int __clk_get_enable_count(struct clk *clk);
+ unsigned long clk_hw_get_rate(const struct clk_hw *hw);
+ unsigned long clk_hw_get_flags(const struct clk_hw *hw);
++void clk_hw_preserve_boot_state(struct clk_hw *hw);
++void clk_hw_sync_state_disable_unused(struct clk_hw *hw);
+ #define clk_hw_can_set_rate_parent(hw) \
+ 	(clk_hw_get_flags((hw)) & CLK_SET_RATE_PARENT)
+ 
+-- 
+2.55.0
+
