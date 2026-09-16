@@ -1,4 +1,4 @@
-From 64f9c96e452d0f0515410cf4ba5f0daf6885f3fc Mon Sep 17 00:00:00 2001
+From 5d0489225996314d6f4f7f2879c7f85ea3cfd599 Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
 Date: Tue, 15 Sep 2026 21:00:58 -0600
 Subject: [PATCH] clk: qcom: gcc: Preserve the boot clock state until
@@ -131,7 +131,7 @@ index 048adfa86..04d5967e8 100644
  					   struct clk_rate_request *req)
  {
 diff --git a/drivers/clk/qcom/common.c b/drivers/clk/qcom/common.c
-index eec369d21..c053eaa3f 100644
+index eec369d21..a9d9fb987 100644
 --- a/drivers/clk/qcom/common.c
 +++ b/drivers/clk/qcom/common.c
 @@ -424,6 +424,20 @@ int qcom_cc_really_probe(struct device *dev,
@@ -161,16 +161,16 @@ index eec369d21..c053eaa3f 100644
  
 +/**
 + * qcom_cc_sync_state() - release the preserved boot clock state
-+ * @pdev: the clock controller platform device
++ * @dev: the clock controller device
 + *
 + * Wire up as the .sync_state callback of the clock controller driver.
 + * Providers with &struct qcom_cc_desc.preserve_boot_state keep the
 + * firmware-enabled clocks on past late_init; this performs the deferred
 + * unused-clock cleanup once all consumers have probed.
 + */
-+void qcom_cc_sync_state(struct platform_device *pdev)
++void qcom_cc_sync_state(struct device *dev)
 +{
-+	struct qcom_cc *cc = platform_get_drvdata(pdev);
++	struct qcom_cc *cc = dev_get_drvdata(dev);
 +	int i;
 +
 +	if (!cc)
@@ -189,7 +189,7 @@ index eec369d21..c053eaa3f 100644
  {
  	struct regmap *regmap;
 diff --git a/drivers/clk/qcom/common.h b/drivers/clk/qcom/common.h
-index 6f2406f88..731b3f5fe 100644
+index 6f2406f88..0792193bf 100644
 --- a/drivers/clk/qcom/common.h
 +++ b/drivers/clk/qcom/common.h
 @@ -49,6 +49,7 @@ struct qcom_cc_desc {
@@ -204,7 +204,7 @@ index 6f2406f88..731b3f5fe 100644
  extern int qcom_cc_register_board_clk(struct device *dev, const char *path,
  				      const char *name, unsigned long rate);
  extern int qcom_cc_register_sleep_clk(struct device *dev);
-+extern void qcom_cc_sync_state(struct platform_device *pdev);
++extern void qcom_cc_sync_state(struct device *dev);
  
  extern struct regmap *qcom_cc_map(struct platform_device *pdev,
  				  const struct qcom_cc_desc *desc);
