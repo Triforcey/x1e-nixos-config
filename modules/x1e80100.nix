@@ -73,6 +73,13 @@ in
             # docs/removing-clk-pd-ignore-unused.md). Verified on the slim7x;
             # restore the two params if a T14s/ISO boot regresses.
 
+            # Deferred probes wait for their suppliers indefinitely: with the
+            # default timeout=0, any deferred probe retried after initcalls
+            # complete hard-fails (-ETIMEDOUT) — that killed the camera chain
+            # (CCI/CSI2 -110) and iris (-110) on slow boots. -1 never
+            # schedules the timeout work (drivers/base/dd.c).
+            "deferred_probe_timeout=-1"
+
             # Kernel security module blacklist:
             # algif_aead (local privilege escalation, https://copy.fail/),
             # esp4/esp6/rxrpc (https://github.com/V4bel/dirtyfrag)
