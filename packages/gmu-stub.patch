@@ -1,4 +1,4 @@
-From ab23446cc4c76115cc0a618ac8a28b60c5d30f83 Mon Sep 17 00:00:00 2001
+From f712bdc5b5b8927cb6b0e9733901f051d92ec026 Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
 Date: Wed, 16 Sep 2026 06:18:47 -0600
 Subject: [PATCH] drm/msm/adreno: Add a GMU stub driver for X1E80100
@@ -23,9 +23,11 @@ clk_ignore_unused / pd_ignore_unused on X1E80100.
 X1E80100 (qcom,adreno-gmu-x185.1) only; other SoCs keep version-specific
 compatibles and can be added after per-board verification.
 ---
- drivers/gpu/drm/msm/Makefile          |  1 +
- drivers/gpu/drm/msm/adreno/gmu-stub.c | 45 +++++++++++++++++++++++++++
- 2 files changed, 46 insertions(+)
+ drivers/gpu/drm/msm/Makefile               |  1 +
+ drivers/gpu/drm/msm/adreno/adreno_device.c |  2 +
+ drivers/gpu/drm/msm/adreno/adreno_gpu.h    |  3 ++
+ drivers/gpu/drm/msm/adreno/gmu-stub.c      | 57 ++++++++++++++++++++++
+ 4 files changed, 63 insertions(+)
  create mode 100644 drivers/gpu/drm/msm/adreno/gmu-stub.c
 
 diff --git a/drivers/gpu/drm/msm/Makefile b/drivers/gpu/drm/msm/Makefile
@@ -40,12 +42,42 @@ index d0c3a4c67..6d698d03d 100644
  	adreno/a6xx_hfi.o \
  	adreno/a6xx_preempt.o \
  	adreno/a8xx_gpu.o \
+diff --git a/drivers/gpu/drm/msm/adreno/adreno_device.c b/drivers/gpu/drm/msm/adreno/adreno_device.c
+index 7f20320ef..f53256963 100644
+--- a/drivers/gpu/drm/msm/adreno/adreno_device.c
++++ b/drivers/gpu/drm/msm/adreno/adreno_device.c
+@@ -422,6 +422,7 @@ void __init adreno_register(void)
+ 		return;
+ 
+ 	platform_driver_register(&adreno_driver);
++	adreno_gmu_stub_register();
+ }
+ 
+ void __exit adreno_unregister(void)
+@@ -430,4 +431,5 @@ void __exit adreno_unregister(void)
+ 		return;
+ 
+ 	platform_driver_unregister(&adreno_driver);
++	adreno_gmu_stub_unregister();
+ }
+diff --git a/drivers/gpu/drm/msm/adreno/adreno_gpu.h b/drivers/gpu/drm/msm/adreno/adreno_gpu.h
+index 1f201322c..dfc0aafd8 100644
+--- a/drivers/gpu/drm/msm/adreno/adreno_gpu.h
++++ b/drivers/gpu/drm/msm/adreno/adreno_gpu.h
+@@ -761,4 +761,7 @@ static inline uint32_t get_wptr(struct msm_ringbuffer *ring)
+ 	readl_poll_timeout((gpu)->mmio + ((addr) << 2), val, cond, \
+ 		interval, timeout)
+ 
++int __init adreno_gmu_stub_register(void);
++void __exit adreno_gmu_stub_unregister(void);
++
+ #endif /* __ADRENO_GPU_H__ */
 diff --git a/drivers/gpu/drm/msm/adreno/gmu-stub.c b/drivers/gpu/drm/msm/adreno/gmu-stub.c
 new file mode 100644
-index 000000000..70cef8739
+index 000000000..9f1183337
 --- /dev/null
 +++ b/drivers/gpu/drm/msm/adreno/gmu-stub.c
-@@ -0,0 +1,45 @@
+@@ -0,0 +1,57 @@
 +// SPDX-License-Identifier: GPL-2.0-only
 +/*
 + * Adreno GMU boot-state preservation stub.
@@ -62,9 +94,15 @@ index 000000000..70cef8739
 + * A trivial stub marks the device probed so the deferred sync_state
 + * cleanup can run. The GPU driver does not depend on the node being
 + * driverless; its lookups go through the device, which exists either way.
++ *
++ * The stub object is linked into the msm module, so it must not create
++ * its own module init/exit (that collides with msm_drv.o). It is
++ * registered and unregistered from the adreno driver's module hooks,
++ * adreno_register()/adreno_unregister().
 + */
 +
 +#include <linux/module.h>
++#include <linux/init.h>
 +#include <linux/of.h>
 +#include <linux/platform_device.h>
 +
@@ -87,10 +125,16 @@ index 000000000..70cef8739
 +		.of_match_table = adreno_gmu_stub_match,
 +	},
 +};
-+module_platform_driver(adreno_gmu_stub_driver);
 +
-+MODULE_DESCRIPTION("Stub driver for the Adreno GMU node (fw_devlink sync_state unblock)");
-+MODULE_LICENSE("GPL");
++int __init adreno_gmu_stub_register(void)
++{
++	return platform_driver_register(&adreno_gmu_stub_driver);
++}
++
++void __exit adreno_gmu_stub_unregister(void)
++{
++	platform_driver_unregister(&adreno_gmu_stub_driver);
++}
 -- 
 2.55.0
 
