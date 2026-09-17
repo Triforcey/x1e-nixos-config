@@ -1,4 +1,4 @@
-From 7cc1dcda8b423cedf7ade60461590e3b72db874d Mon Sep 17 00:00:00 2001
+From 35fad83e72a35410450449e64b0792a1b46974a2 Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
 Date: Thu, 17 Sep 2026 13:15:51 -0600
 Subject: [PATCH] drm/msm/dpu: full-modeset system suspend/resume for the DPU
@@ -30,7 +30,7 @@ defense-in-depth rather than the fix.
  2 files changed, 89 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
-index 58d616d..89ed2c8 100644
+index 58d616d..cb0b156 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 @@ -18,6 +18,8 @@
@@ -101,7 +101,7 @@ index 58d616d..89ed2c8 100644
 +	struct msm_drm_private *priv = platform_get_drvdata(pdev);
 +	struct dpu_kms *dpu_kms = to_dpu_kms(priv->kms);
 +	struct drm_device *ddev = dpu_kms->dev;
-+	struct drm_atomic_state *state;
++	struct drm_atomic_commit *state;
 +	int ret;
 +
 +	ret = pm_runtime_force_resume(dev);
