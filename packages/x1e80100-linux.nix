@@ -192,6 +192,20 @@ linuxPackagesFor (buildLinux {
       patch = ./dpu-ctl-hwreset-resume.patch;
     }
 
+    # SILENT corruption fix: the mdss power-domain collapse across suspend
+    # loses volatile per-DSPP color state (GC LUT RAM); both halves' LUTs
+    # come back as different garbage (devcoredump: LUT region 0xa00-0xf00
+    # differs entirely between dspp_0/dspp_1, all other registers match)
+    # and the atomic restore never re-programs them because the DRM state
+    # reports no color-management change. Symptom: colors warped on both
+    # halves after resume (desaturation left, warp+static right), zero
+    # kernel errors. Flag the color state dirty on runtime resume and
+    # after CTL-reset recovery so the next commit re-applies PCC/GC.
+    {
+      name = "drm/msm/dpu: re-apply DSPP color state after power-domain collapse";
+      patch = ./dpu-dspp-color-resume.patch;
+    }
+
     # TEMPORARY DIAGNOSTIC (2026-09-17) — remove after the suspend
     # corruption campaign: debugfs 'misr' file under the msm debug dir.
     # Samples the INTF MISR signature + scan counters on read (~2 s

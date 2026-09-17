@@ -1,0 +1,124 @@
+From 0ea5646ea91fa901b026c0462c15a57fc31ea626 Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Thu, 17 Sep 2026 09:56:11 -0600
+Subject: [PATCH] drm/msm/dpu: re-apply DSPP color state after power-domain
+ collapse
+
+On X1E80100 (Yoga Slim 7x) with the mdss power domain gating at system
+suspend, the volatile per-DSPP color state does not survive the domain
+collapse: after resume both DSPPs' GC LUT RAM contains different garbage
+(devcoredump: the two DSPPs' LUT regions 0xa00-0xf00 differ entirely
+while every other register matches), warping colors across the whole
+panel - desaturation on one half, strong warp + static on the other.
+The operator's screenshot comparison confirmed the framebuffer itself
+is correct, so the corruption is scanout-side.
+
+The atomic restore does not re-program the LUTs because the restored
+DRM state reports color_mgmt_changed == 0, and
+_dpu_crtc_setup_cp_blocks() skips on exactly that condition.
+
+Flag the color state dirty on dpu runtime resume (and after a CTL
+reset recovery) so the next commit re-applies PCC/GC to every DSPP.
+
+Also visible in the post-failure devcoredump: lm_1 carries OP_MODE
+BIT(31) while lm_0 does not; unexplained, recorded for reference.
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c           | 14 ++++++++++++--
+ .../gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c   | 10 ++++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c            |  8 ++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h            |  8 ++++++++
+ 4 files changed, 38 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+index 42d0a52..ba9de32 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
+@@ -855,10 +855,20 @@ static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
+ 	struct dpu_hw_dspp *dspp;
+ 	int i;
+ 
+-
+-	if (!state->color_mgmt_changed && !drm_atomic_crtc_needs_modeset(state))
++	/*
++	 * Also re-apply after a runtime resume: the power-domain collapse
++	 * across system suspend loses volatile per-DSPP color state (the
++	 * GC LUT), which this loop is otherwise skipped for because the
++	 * restored DRM state reports no color-management change. Observed
++	 * on X1E80100: both DSPPs' LUT RAM comes back corrupted, warping
++	 * colors on both halves of the panel with no kernel error.
++	 */
++	if (!state->color_mgmt_changed && !drm_atomic_crtc_needs_modeset(state) &&
++	    !_dpu_crtc_get_kms(crtc)->dspp_color_state_dirty)
+ 		return;
+ 
++	_dpu_crtc_get_kms(crtc)->dspp_color_state_dirty = false;
++
+ 	for (i = 0; i < cstate->num_mixers; i++) {
+ 		ctl = mixer[i].lm_ctl;
+ 		dspp = mixer[i].hw_dspp;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+index 27e88d1..bc291f2 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+@@ -542,10 +542,20 @@ static void dpu_encoder_phys_vid_recover_after_ctl_reset(
+ 		struct dpu_encoder_phys *phys_enc)
+ {
+ 	struct dpu_hw_ctl *ctl = phys_enc->hw_ctl;
++	struct msm_drm_private *priv;
++	struct dpu_kms *dpu_kms;
+ 	unsigned long lock_flags;
+ 	int rc = -EINVAL;
+ 	int i;
+ 
++	/*
++	 * The reset that just completed also loses volatile per-DSPP color
++	 * state; force the next commit to re-apply it.
++	 */
++	priv = phys_enc->parent->dev->dev_private;
++	dpu_kms = to_dpu_kms(priv->kms);
++	dpu_kms->dspp_color_state_dirty = true;
++
+ 	spin_lock_irqsave(phys_enc->enc_spinlock, lock_flags);
+ 	phys_enc->hw_intf->ops.enable_timing(phys_enc->hw_intf, 1);
+ 	spin_unlock_irqrestore(phys_enc->enc_spinlock, lock_flags);
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index da3556e..60a10f2 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -1465,6 +1465,14 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
+ 
+ 	dpu_vbif_init_memtypes(dpu_kms);
+ 
++	/*
++	 * The power-domain collapse across suspend loses volatile per-DSPP
++	 * color state (the GC LUT); the atomic restore will not re-program
++	 * it because the DRM state is unchanged. Force the next commit to
++	 * re-apply the color processing blocks.
++	 */
++	dpu_kms->dspp_color_state_dirty = true;
++
+ 	drm_for_each_encoder(encoder, ddev)
+ 		dpu_encoder_virt_runtime_resume(encoder);
+ 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
+index e39831a..212b294 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
+@@ -81,6 +81,14 @@ struct dpu_kms {
+ 
+ 	struct dpu_rm rm;
+ 
++	/*
++	 * Set on runtime resume: the mdss power-domain collapse across
++	 * system suspend loses volatile per-DSPP color state (e.g. the GC
++	 * LUT), which the atomic restore does not re-program because the
++	 * DRM state is unchanged. The next crtc commit re-applies it.
++	 */
++	bool dspp_color_state_dirty;
++
+ 	struct dpu_hw_vbif *hw_vbif;
+ 	struct dpu_hw_mdp *hw_mdp;
+ 
+-- 
+2.55.0
+
