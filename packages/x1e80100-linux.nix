@@ -176,6 +176,22 @@ linuxPackagesFor (buildLinux {
       patch = ./gmu-stub.patch;
     }
 
+    # Suspend/resume display fix (own patch, upstream candidate): with
+    # pd_ignore_unused/clk_ignore_unused dropped, the mdss domain now
+    # collapses at suspend and HW latches its own CTL reset. At resume the
+    # first atomic commit polls for its completion with the 2 ms budget
+    # sized for the driver-issued reset; the reset completes just after the
+    # poll gives up (devcoredump 2026-09-16: CTL_SW_RESET cleared,
+    # CTL_INTF_ACTIVE=0, intf5 timing engine still scanning). The failure
+    # path then permanently unregisters the vblank IRQ, wedging the display
+    # (corrupt scanout -> blue) until reboot. Widen the hw-reset wait to
+    # 50 ms and keep the vblank IRQ registered. Reproduced in 3 cycles
+    # pre-patch; boot test pending.
+    {
+      name = "drm/msm/dpu: give the hw-initiated CTL reset a realistic wait at resume";
+      patch = ./dpu-ctl-hwreset-resume.patch;
+    }
+
     # EXPERIMENTAL (2026-09-16), NOT ENABLED: USB host-mode runtime PM.
     # dwc3_core_probe() pm_runtime_forbid()s the controller and never
     # lifts it, so the USB tree never autosuspends. This patch allows
