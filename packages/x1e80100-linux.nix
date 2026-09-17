@@ -192,6 +192,16 @@ linuxPackagesFor (buildLinux {
       patch = ./dpu-ctl-hwreset-resume.patch;
     }
 
+    # TEMPORARY DIAGNOSTIC (2026-09-17) — remove after the suspend
+    # corruption campaign: debugfs 'misr' file under the msm debug dir.
+    # Samples the INTF MISR signature + scan counters on read (~2 s
+    # cadence from userspace) to localize where the post-resume display
+    # corruption enters the scanout path (datapath vs eDP link).
+    {
+      name = "drm/msm/dpu: debugfs MISR sampler (temporary diagnostic)";
+      patch = ./dpu-misr-debug.patch;
+    }
+
     # EXPERIMENTAL (2026-09-16), NOT ENABLED: USB host-mode runtime PM.
     # dwc3_core_probe() pm_runtime_forbid()s the controller and never
     # lifts it, so the USB tree never autosuspends. This patch allows

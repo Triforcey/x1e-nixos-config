@@ -1,0 +1,139 @@
+From 25c15bd0fce267165730a689e5d5c4ffb5036293 Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Thu, 17 Sep 2026 08:40:23 -0600
+Subject: [PATCH] drm/msm/dpu: debugfs MISR sampler for scanout-data
+ localization
+
+Temporary diagnostic for the X1E80100 suspend/resume display corruption
+campaign: the composited framebuffer (userspace screenshots) is known
+correct while the panel shows corruption, so the break is somewhere in
+the DPU scanout path (SSPP -> LM -> CTL -> INTF -> eDP PHY). The DPU has
+no intermediate pixel readback, but the INTF block computes MISR
+signatures of the pixel stream it transmits.
+
+Expose a debugfs 'misr' file under the msm debug dir: reading it starts
+a fresh MISR window on the active video intf (~2 frames at 60 Hz) and
+returns the signature together with the intf enable state and
+frame/line counters. Sampling it every ~2 s while reproducing localizes
+the failure: frozen signature + advancing frames = datapath transmitting
+stale/no content (CTL wipe class); changing signature = pixels still
+flowing (eDP link/PHY class).
+
+- dpu_encoder: dpu_encoder_get_active_hw_intf() debug walker.
+- dpu_kms: debugfs 'misr' attribute wired next to the danger/sspp
+  debug entries.
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c | 20 +++++++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h |  8 +++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c     | 33 +++++++++++++++++++++
+ 3 files changed, 61 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index 778e231..0241f97 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -219,6 +219,26 @@ struct dpu_encoder_virt {
+ 
+ #define to_dpu_encoder_virt(x) container_of(x, struct dpu_encoder_virt, base)
+ 
++/**
++ * dpu_encoder_get_active_hw_intf - debug helper returning the hw_intf of
++ * the first physical encoder that owns one (e.g. the active video intf),
++ * or NULL.
++ */
++struct dpu_hw_intf *dpu_encoder_get_active_hw_intf(struct drm_encoder *drm_enc)
++{
++	struct dpu_encoder_virt *dpu_enc = to_dpu_encoder_virt(drm_enc);
++	int i;
++
++	for (i = 0; i < dpu_enc->num_phys_encs; i++) {
++		struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
++
++		if (phys && phys->hw_intf)
++			return phys->hw_intf;
++	}
++
++	return NULL;
++}
++
+ static u32 dither_matrix[DITHER_MATRIX_SZ] = {
+ 	15, 7, 13, 5, 3, 11, 1, 9, 12, 4, 14, 6, 0, 8, 2, 10
+ };
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+index 4942097..3a3bc6e 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+@@ -98,4 +98,12 @@ void dpu_encoder_cleanup_wb_job(struct drm_encoder *drm_enc,
+ bool dpu_encoder_is_valid_for_commit(struct drm_encoder *drm_enc);
+ 
+ void dpu_encoder_start_frame_done_timer(struct drm_encoder *drm_enc);
++struct dpu_hw_intf;
++
++/**
++ * dpu_encoder_get_active_hw_intf - debug helper: hw_intf of the first
++ * physical encoder that owns one, or NULL.
++ */
++struct dpu_hw_intf *dpu_encoder_get_active_hw_intf(struct drm_encoder *drm_enc);
++
+ #endif /* __DPU_ENCODER_H__ */
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index da3556e..4b6a68f 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -30,6 +30,7 @@
+ #include "dpu_core_irq.h"
+ #include "dpu_crtc.h"
+ #include "dpu_encoder.h"
++#include "dpu_hw_intf.h"
+ #include "dpu_formats.h"
+ #include "dpu_hw_vbif.h"
+ #include "dpu_kms.h"
+@@ -288,6 +289,36 @@ static void dpu_debugfs_sspp_init(struct dpu_kms *dpu_kms, struct dentry *debugf
+ 	}
+ }
+ 
++static int dpu_debugfs_misr_show(struct seq_file *s, void *v)
++{
++	struct dpu_kms *dpu_kms = s->private;
++	struct drm_encoder *drm_enc;
++	struct dpu_hw_intf *intf;
++
++	drm_for_each_encoder(drm_enc, dpu_kms->dev) {
++		struct dpu_hw_intf_status status = { 0 };
++		u32 misr = 0;
++		int rc;
++
++		intf = dpu_encoder_get_active_hw_intf(drm_enc);
++		if (!intf || !intf->ops.setup_misr ||
++		    !intf->ops.collect_misr || !intf->ops.get_status)
++			continue;
++
++		intf->ops.setup_misr(intf);
++		msleep(34);	/* signature window: ~2 frames at 60 Hz */
++		rc = intf->ops.collect_misr(intf, &misr);
++		intf->ops.get_status(intf, &status);
++		seq_printf(s, "intf%d en=%u frames=%u lines=%u misr=%#010x rc=%d\n",
++			   intf->idx - INTF_0, status.is_en,
++			   status.frame_count, status.line_count,
++			   misr, rc);
++	}
++
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(dpu_debugfs_misr);
++
+ static int dpu_kms_debugfs_init(struct msm_kms *kms, struct drm_minor *minor)
+ {
+ 	struct dpu_kms *dpu_kms = to_dpu_kms(kms);
+@@ -309,6 +340,8 @@ static int dpu_kms_debugfs_init(struct msm_kms *kms, struct drm_minor *minor)
+ 	dpu_debugfs_vbif_init(dpu_kms, entry);
+ 	dpu_debugfs_core_irq_init(dpu_kms, entry);
+ 	dpu_debugfs_sspp_init(dpu_kms, entry);
++	debugfs_create_file("misr", 0600, entry, dpu_kms,
++			    &dpu_debugfs_misr_fops);
+ 
+ 	return dpu_core_perf_debugfs_init(dpu_kms, entry);
+ }
+-- 
+2.55.0
+
