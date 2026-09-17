@@ -1,6 +1,6 @@
-From d83df19607eee33b536a4023e2cda8225f52a861 Mon Sep 17 00:00:00 2001
+From 74b374c3f2a2a74e05be6b4ae41295615828629c Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
-Date: Wed, 16 Sep 2026 18:12:50 -0600
+Date: Wed, 16 Sep 2026 18:23:37 -0600
 Subject: [PATCH] drm/msm/dpu: give the hw-initiated CTL reset a realistic wait
  at resume
 
@@ -27,14 +27,14 @@ Reproduced deterministically in three suspend cycles on
 fertile-forge (2026-09-16); evidence: kernel journal + devcoredump
 snapshot of the failing commit.
 ---
- dpu_encoder_phys_vid.c |  9 +++++++--
- dpu_hw_ctl.c           | 12 +++++++++++-
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c |  9 +++++++--
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c           | 12 +++++++++++-
  2 files changed, 18 insertions(+), 3 deletions(-)
 
-diff --git a/dpu_encoder_phys_vid.c b/dpu_encoder_phys_vid.c
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
 index ba810f2..0f19fbf 100644
---- a/dpu_encoder_phys_vid.c
-+++ b/dpu_encoder_phys_vid.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
 @@ -571,8 +571,13 @@ static void dpu_encoder_phys_vid_prepare_for_kickoff(
  		DPU_ERROR_VIDENC(phys_enc, "ctl %d reset failure: %d\n",
  				ctl->idx, rc);
@@ -51,10 +51,10 @@ index ba810f2..0f19fbf 100644
  	}
  }
  
-diff --git a/dpu_hw_ctl.c b/dpu_hw_ctl.c
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
 index 36a497f..332f9cb 100644
---- a/dpu_hw_ctl.c
-+++ b/dpu_hw_ctl.c
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
 @@ -51,6 +51,16 @@
  #define CTL_FLUSH_MASK_CTL              BIT(17)
  
