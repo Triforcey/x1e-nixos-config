@@ -1,4 +1,4 @@
-From 8f321d7791a682f97e183125713b75d4e44b0a4a Mon Sep 17 00:00:00 2001
+From 7cc1dcda8b423cedf7ade60461590e3b72db874d Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
 Date: Thu, 17 Sep 2026 13:15:51 -0600
 Subject: [PATCH] drm/msm/dpu: full-modeset system suspend/resume for the DPU
@@ -26,8 +26,8 @@ With resume being a full modeset, the recovery series becomes
 defense-in-depth rather than the fix.
 ---
  drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c | 85 ++++++++++++++++++++++++-
- drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h |  3 +
- 2 files changed, 86 insertions(+), 2 deletions(-)
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h |  6 ++
+ 2 files changed, 89 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 index 58d616d..89ed2c8 100644
@@ -135,15 +135,25 @@ index 58d616d..89ed2c8 100644
  	.complete = msm_kms_pm_complete,
  };
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
-index 32ede7e..79aef05 100644
+index 32ede7e..30385df 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
-@@ -90,6 +90,9 @@ struct dpu_kms {
+@@ -56,6 +56,8 @@
+ 
+ extern bool dpu_use_virtual_planes;
+ 
++struct drm_atomic_commit;
++
+ struct dpu_kms {
+ 	struct msm_kms base;
+ 	struct drm_device *dev;
+@@ -90,6 +92,10 @@ struct dpu_kms {
  	 */
  	bool dspp_color_state_dirty;
  
-+	/* full atomic state saved across system suspend, re-committed at resume */
-+	struct drm_atomic_state *suspend_state;
++	/* atomic commit saved across system suspend, re-committed at resume
++	 * (drm_atomic_helper_suspend/resume operate on commits in v7.2+) */
++	struct drm_atomic_commit *suspend_state;
 +
  	struct dpu_hw_vbif *hw_vbif;
  	struct dpu_hw_mdp *hw_mdp;
