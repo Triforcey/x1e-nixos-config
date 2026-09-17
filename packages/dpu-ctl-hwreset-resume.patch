@@ -1,78 +1,126 @@
-From 74b374c3f2a2a74e05be6b4ae41295615828629c Mon Sep 17 00:00:00 2001
+From 5ce2452f751e085f89e72201e943d0fadc51db71 Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
-Date: Wed, 16 Sep 2026 18:23:37 -0600
-Subject: [PATCH] drm/msm/dpu: give the hw-initiated CTL reset a realistic wait
- at resume
+Date: Wed, 16 Sep 2026 19:20:46 -0600
+Subject: [PATCH] drm/msm/dpu: recover the pipeline when the hw-initiated CTL
+ reset outlives a commit
 
-X1E80100 (Lenovo Yoga Slim 7x), v7.2 with pd_ignore_unused and
-clk_ignore_unused dropped: the first suspend/resume campaign on this
-config wedges the display after a few cycles. At resume the
-hardware-initiated CTL reset is still in flight when the first atomic
-commit polls for completion. dpu_hw_ctl_wait_reset_status() only polls
-for DPU_REG_RESET_TIMEOUT_US (2 ms), a budget sized for the synchronous
-driver-issued reset; on this platform the reset completes shortly after
-the poll gives up (a devcoredump captured in the failure path shows
-CTL_SW_RESET already cleared, with CTL_INTF_ACTIVE=0 while intf5 was
-still scanning the panel).
+On X1E80100 (Yoga Slim 7x) with pd_ignore_unused/clk_ignore_unused
+dropped, suspend/resume wedges the display: the mdss power domain
+collapses at suspend, hardware latches its own CTL reset, and the first
+resume commit's wait_reset_status() times out because the reset only
+progresses once the intf timing engine is scanning frames again. When
+it finally completes it wipes the CTL configuration (CTL_INTF_ACTIVE=0
+with the intf running), so every later commit times out against a dead
+pipeline: vblank/frame-done timeout storm, corrupt then blue screen
+until reboot. The upstream failure path made this worse by permanently
+unregistering the vblank IRQ.
 
-The failure path then permanently unregisters the vblank IRQ callback,
-so every later atomic commit times out forever (vblank timeout: 218c0,
-enc42 frame done timeout) and the screen wedges until reboot.
+- dpu_hw_ctl: give the hw-initiated reset wait its own 50 ms budget
+  (the 2 ms DPU_REG_RESET_TIMEOUT_US is sized for the synchronous
+  driver-issued reset).
+- dpu_encoder_phys_vid: on wait failure, restart the frame flow, wait
+  for the reset to complete, and reprogram the CTL via the normal
+  enable path so the in-flight commit lands on a live pipeline. Leave
+  the vblank IRQ registered.
+- dpu_encoder: log the discarded reset failure in
+  dpu_encoder_helper_phys_cleanup() - the unguarded ctl reset there is
+  the prime suspect for leaving CTL_SW_RESET latched across suspend.
 
-Give the hw-initiated reset wait its own, wider budget (50 ms; only
-paid when the bit is actually set) and leave the vblank IRQ registered
-on failure so recovery is possible.
-
-Reproduced deterministically in three suspend cycles on
-fertile-forge (2026-09-16); evidence: kernel journal + devcoredump
-snapshot of the failing commit.
+Reproduced deterministically on cycle 3 of suspend/resume testing
+(fertile-forge, 2026-09-16); evidence: kernel journal + devcoredump
+snapshots of the failing commits.
 ---
- drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c |  9 +++++++--
- drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c           | 12 +++++++++++-
- 2 files changed, 18 insertions(+), 3 deletions(-)
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c   |  4 ++-
+ .../drm/msm/disp/dpu1/dpu_encoder_phys_vid.c  | 33 +++++++++++++++++--
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c    | 10 +++++-
+ 3 files changed, 43 insertions(+), 4 deletions(-)
 
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index 778e231..0d9056d 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -2264,7 +2264,9 @@ void dpu_encoder_helper_phys_cleanup(struct dpu_encoder_phys *phys_enc)
+ 
+ 	dpu_enc = to_dpu_encoder_virt(phys_enc->parent);
+ 
+-	ctl->ops.reset(ctl);
++	if (ctl->ops.reset(ctl))
++		DPU_ERROR_ENC(dpu_enc, "ctl %d reset failed during cleanup\n",
++			      ctl->idx);
+ 
+ 	dpu_encoder_helper_reset_mixers(phys_enc);
+ 
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
-index ba810f2..0f19fbf 100644
+index ba810f2..3276a2b 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
-@@ -571,8 +571,13 @@ static void dpu_encoder_phys_vid_prepare_for_kickoff(
+@@ -555,6 +555,7 @@ static void dpu_encoder_phys_vid_prepare_for_kickoff(
+ 	struct dpu_hw_ctl *ctl;
+ 	int rc;
+ 	struct drm_encoder *drm_enc;
++	unsigned long lock_flags;
+ 
+ 	drm_enc = phys_enc->parent;
+ 
+@@ -571,8 +572,36 @@ static void dpu_encoder_phys_vid_prepare_for_kickoff(
  		DPU_ERROR_VIDENC(phys_enc, "ctl %d reset failure: %d\n",
  				ctl->idx, rc);
  		msm_disp_snapshot_state(drm_enc->dev);
 -		dpu_core_irq_unregister_callback(phys_enc->dpu_kms,
 -				phys_enc->irq[INTR_IDX_VSYNC]);
++
 +		/*
-+		 * Leave the vblank IRQ registered. Unregistering it here turned a
-+		 * transient reset race at resume into a permanent display wedge:
-+		 * the reset completes shortly after the failed wait, but with the
-+		 * callback gone every later commit times out forever. A genuinely
-+		 * stuck commit fails on its own timeout.
++		 * The hardware-initiated reset completes only once the timing
++		 * engine is scanning frames again, and it wipes the CTL
++		 * configuration when it does (observed on X1E80100 after
++		 * suspend/resume: the first commit's wait times out with the
++		 * timing engine idle, and a snapshot taken while the intf was
++		 * scanning again shows CTL_SW_RESET cleared and CTL_INTF_ACTIVE
++		 * wiped). Unregistering the vblank IRQ here turned that transient
++		 * state into a permanent display wedge, since every later commit
++		 * timed out against a CTL that no longer had a live pipeline.
++		 *
++		 * Recover instead: restart the frame flow, wait for the reset to
++		 * complete, then reprogram the CTL so this commit's flush lands on
++		 * a live pipeline.
 +		 */
++		spin_lock_irqsave(phys_enc->enc_spinlock, lock_flags);
++		phys_enc->hw_intf->ops.enable_timing(phys_enc->hw_intf, 1);
++		spin_unlock_irqrestore(phys_enc->enc_spinlock, lock_flags);
++
++		rc = ctl->ops.wait_reset_status(ctl);
++		if (rc) {
++			DPU_ERROR_VIDENC(phys_enc,
++					"ctl %d reset still pending after frame restart: %d\n",
++					ctl->idx, rc);
++			msm_disp_snapshot_state(drm_enc->dev);
++			return;
++		}
++
++		dpu_encoder_phys_vid_enable(phys_enc);
  	}
  }
  
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
-index 36a497f..332f9cb 100644
+index 36a497f..e80bb19 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
-@@ -51,6 +51,16 @@
+@@ -51,6 +51,14 @@
  #define CTL_FLUSH_MASK_CTL              BIT(17)
  
  #define DPU_REG_RESET_TIMEOUT_US        2000
 +/*
 + * The hardware-initiated CTL reset (CTL_SW_RESET latched by hardware, e.g.
 + * when the mdss power domain cycles during system suspend) completes
-+ * asynchronously. At resume the display clock domain can still be ramping
-+ * when the first atomic commit polls for its completion, so the wait needs
-+ * a wider budget than the synchronous driver-issued reset: on X1E80100 the
-+ * reset was still in progress after the 2 ms poll but had completed by the
-+ * time the failure path captured a devcoredump snapshot moments later.
++ * asynchronously: on X1E80100 it only progresses once the affected intf's
++ * timing engine is scanning frames again, so it can outlive the first
++ * resume commit entirely.
 + */
 +#define DPU_HW_RESET_WAIT_TIMEOUT_US    50000
  #define  MERGE_3D_IDX   23
  #define  DSC_IDX        22
  #define CDM_IDX         26
-@@ -454,7 +464,7 @@ static int dpu_hw_ctl_wait_reset_status(struct dpu_hw_ctl *ctx)
+@@ -454,7 +462,7 @@ static int dpu_hw_ctl_wait_reset_status(struct dpu_hw_ctl *ctx)
  		return 0;
  
  	pr_debug("hw ctl reset is set for ctl:%d\n", ctx->idx);
