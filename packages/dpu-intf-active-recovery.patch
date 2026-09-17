@@ -1,0 +1,99 @@
+From fbbb14e473292b3cc32cb53a1d694d5daa8c2d32 Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Thu, 17 Sep 2026 11:32:57 -0600
+Subject: [PATCH] drm/msm/dpu: detect and recover CTL wipes between commits
+
+Third observed failure mode on X1E80100 after the mdss power domain
+collapse at suspend: the hardware-initiated CTL reset can complete
+*between* commits - no wait fails, no error is logged - and the wipe
+leaves CTL_INTF_ACTIVE cleared while the intf timing engine keeps
+scanning. The panel shows a flat solid color until the next suspend
+cycle's full pipeline re-enable, because nothing re-programs the CTL.
+
+Detect the wipe at every kickoff by checking the CTL_INTF_ACTIVE bit
+for the intf (one register read) and run the existing re-arm +
+reprogram recovery when it is lost, so the in-flight flush lands on a
+live pipeline and the corruption self-heals within one commit.
+
+- dpu_hw_ctl: expose get_intf_active reading CTL_INTF_ACTIVE.
+- dpu_encoder_phys_vid: integrity check in prepare_for_kickoff.
+---
+ .../drm/msm/disp/dpu1/dpu_encoder_phys_vid.c   | 18 ++++++++++++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c     |  6 ++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.h     |  7 +++++++
+ 3 files changed, 31 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+index b9ab5aa..5a8c2f8 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
+@@ -634,6 +634,24 @@ static void dpu_encoder_phys_vid_prepare_for_kickoff(
+ 		msm_disp_snapshot_state(drm_enc->dev);
+ 		dpu_encoder_phys_vid_recover_after_ctl_reset(phys_enc);
+ 	}
++
++	/*
++	 * The hardware-initiated reset can also complete *between* commits,
++	 * wiping the CTL configuration (CTL_INTF_ACTIVE cleared) while the
++	 * timing engine keeps scanning - observed on X1E80100 as a flat
++	 * solid-color screen that persists until the next suspend cycle
++	 * re-enables the pipeline. Detect the wipe here and recover so the
++	 * in-flight flush lands on a live pipeline again.
++	 */
++	if (ctl->ops.get_intf_active &&
++	    !(ctl->ops.get_intf_active(ctl) &
++	      BIT(phys_enc->hw_intf->idx - INTF_0))) {
++		DPU_ERROR_VIDENC(phys_enc,
++				"ctl %d intf%d active bit lost between commits, recovering\n",
++				ctl->idx, phys_enc->hw_intf->idx - INTF_0);
++		msm_disp_snapshot_state(drm_enc->dev);
++		dpu_encoder_phys_vid_recover_after_ctl_reset(phys_enc);
++	}
+ }
+ 
+ static void dpu_encoder_phys_vid_disable(struct dpu_encoder_phys *phys_enc)
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
+index 1d5b788..1a24ab8 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.c
+@@ -471,6 +471,11 @@ static int dpu_hw_ctl_wait_reset_status(struct dpu_hw_ctl *ctx)
+ 	return 0;
+ }
+ 
++static u32 dpu_hw_ctl_get_intf_active(struct dpu_hw_ctl *ctx)
++{
++	return DPU_REG_READ(&ctx->hw, CTL_INTF_ACTIVE);
++}
++
+ static void dpu_hw_ctl_clear_all_blendstages(struct dpu_hw_ctl *ctx)
+ {
+ 	struct dpu_hw_blk_reg_map *c = &ctx->hw;
+@@ -857,6 +862,7 @@ struct dpu_hw_ctl *dpu_hw_ctl_init(struct drm_device *dev,
+ 	c->ops.trigger_pending = dpu_hw_ctl_trigger_pending;
+ 	c->ops.reset = dpu_hw_ctl_reset_control;
+ 	c->ops.wait_reset_status = dpu_hw_ctl_wait_reset_status;
++	c->ops.get_intf_active = dpu_hw_ctl_get_intf_active;
+ 	if (mdss_ver->core_major_ver < 12) {
+ 		c->ops.clear_all_blendstages = dpu_hw_ctl_clear_all_blendstages;
+ 		c->ops.setup_blendstage = dpu_hw_ctl_setup_blendstage;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.h
+index e535bf0..4087836 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_ctl.h
+@@ -256,6 +256,13 @@ struct dpu_hw_ctl_ops {
+ 	 */
+ 	int (*wait_reset_status)(struct dpu_hw_ctl *ctx);
+ 
++	/**
++	 * @get_intf_active: read the CTL_INTF_ACTIVE register, used to detect
++	 * a hardware-initiated ctl reset wiping the pipeline configuration
++	 * between commits.
++	 */
++	u32 (*get_intf_active)(struct dpu_hw_ctl *ctx);
++
+ 	/**
+ 	 * @clear_all_blendstages: Set all blend stages to disabled
+ 	 * @ctx       : ctl path ctx pointer
+-- 
+2.55.0
+

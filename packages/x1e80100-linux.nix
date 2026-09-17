@@ -206,6 +206,18 @@ linuxPackagesFor (buildLinux {
       patch = ./dpu-dspp-color-resume.patch;
     }
 
+    # FLAT-PURPLE fix: the hardware-initiated CTL reset can complete
+    # *between* commits — no wait fails, no error logged — and the wipe
+    # clears CTL_INTF_ACTIVE while the intf keeps scanning: flat
+    # solid-color screen until the next suspend re-enables the pipeline.
+    # Every kickoff now verifies the intf active bit (one register read)
+    # and runs the re-arm + reprogram recovery when it is lost, so the
+    # wipe self-heals within one commit.
+    {
+      name = "drm/msm/dpu: detect and recover CTL wipes between commits";
+      patch = ./dpu-intf-active-recovery.patch;
+    }
+
     # TEMPORARY DIAGNOSTIC (2026-09-17) — remove after the suspend
     # corruption campaign: debugfs 'misr' file under the msm debug dir.
     # Samples the INTF MISR signature + scan counters on read (~2 s
