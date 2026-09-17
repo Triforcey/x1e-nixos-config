@@ -1,4 +1,4 @@
-From 0ea5646ea91fa901b026c0462c15a57fc31ea626 Mon Sep 17 00:00:00 2001
+From 613f36b83c3cbfb2626be2f95da33ad1ab6f1c3d Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
 Date: Thu, 17 Sep 2026 09:56:11 -0600
 Subject: [PATCH] drm/msm/dpu: re-apply DSPP color state after power-domain
@@ -18,22 +18,26 @@ DRM state reports color_mgmt_changed == 0, and
 _dpu_crtc_setup_cp_blocks() skips on exactly that condition.
 
 Flag the color state dirty on dpu runtime resume (and after a CTL
-reset recovery) so the next commit re-applies PCC/GC to every DSPP.
+reset recovery) and re-apply it on every crtc commit for a 1 s window:
+the first post-resume commit can race the async domain/CTL restore and
+lose its LUT writes (observed: corruption self-healed on one resume and
+persisted on the next), so repetition until the window closes is what
+makes the corruption self-heal reliably.
 
 Also visible in the post-failure devcoredump: lm_1 carries OP_MODE
 BIT(31) while lm_0 does not; unexplained, recorded for reference.
 ---
- drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c           | 14 ++++++++++++--
- .../gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c   | 10 ++++++++++
- drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c            |  8 ++++++++
- drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h            |  8 ++++++++
- 4 files changed, 38 insertions(+), 2 deletions(-)
+ drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c      | 19 +++++++++++++++++--
+ .../drm/msm/disp/dpu1/dpu_encoder_phys_vid.c  | 10 ++++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c       |  9 +++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h       | 11 +++++++++++
+ 4 files changed, 47 insertions(+), 2 deletions(-)
 
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-index 42d0a52..ba9de32 100644
+index 42d0a52..661802b 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-@@ -855,10 +855,20 @@ static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
+@@ -855,10 +855,25 @@ static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
  	struct dpu_hw_dspp *dspp;
  	int i;
  
@@ -48,16 +52,21 @@ index 42d0a52..ba9de32 100644
 +	 * colors on both halves of the panel with no kernel error.
 +	 */
 +	if (!state->color_mgmt_changed && !drm_atomic_crtc_needs_modeset(state) &&
-+	    !_dpu_crtc_get_kms(crtc)->dspp_color_state_dirty)
++	    !time_before(jiffies, _dpu_crtc_get_kms(crtc)->dspp_color_dirty_until))
  		return;
  
-+	_dpu_crtc_get_kms(crtc)->dspp_color_state_dirty = false;
++	/*
++	 * Re-apply on every commit while the window is open: the first
++	 * post-resume commit can race the async domain/CTL restore and its
++	 * LUT writes are lost; repeating until the window closes makes the
++	 * corruption self-heal instead of persisting until the next resume.
++	 */
 +
  	for (i = 0; i < cstate->num_mixers; i++) {
  		ctl = mixer[i].lm_ctl;
  		dspp = mixer[i].hw_dspp;
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
-index 27e88d1..bc291f2 100644
+index 27e88d1..b9ab5aa 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder_phys_vid.c
 @@ -542,10 +542,20 @@ static void dpu_encoder_phys_vid_recover_after_ctl_reset(
@@ -76,16 +85,16 @@ index 27e88d1..bc291f2 100644
 +	 */
 +	priv = phys_enc->parent->dev->dev_private;
 +	dpu_kms = to_dpu_kms(priv->kms);
-+	dpu_kms->dspp_color_state_dirty = true;
++	dpu_kms->dspp_color_dirty_until = jiffies + msecs_to_jiffies(1000);
 +
  	spin_lock_irqsave(phys_enc->enc_spinlock, lock_flags);
  	phys_enc->hw_intf->ops.enable_timing(phys_enc->hw_intf, 1);
  	spin_unlock_irqrestore(phys_enc->enc_spinlock, lock_flags);
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
-index da3556e..60a10f2 100644
+index da3556e..5edd27e 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
-@@ -1465,6 +1465,14 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
+@@ -1465,6 +1465,15 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
  
  	dpu_vbif_init_memtypes(dpu_kms);
  
@@ -95,16 +104,17 @@ index da3556e..60a10f2 100644
 +	 * it because the DRM state is unchanged. Force the next commit to
 +	 * re-apply the color processing blocks.
 +	 */
-+	dpu_kms->dspp_color_state_dirty = true;
++	dpu_kms->dspp_color_dirty_until = jiffies + msecs_to_jiffies(1000);
++	pr_info("[dpu] color state flagged dirty: re-applying for the next 1s\n");
 +
  	drm_for_each_encoder(encoder, ddev)
  		dpu_encoder_virt_runtime_resume(encoder);
  
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
-index e39831a..212b294 100644
+index e39831a..b525c0e 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
-@@ -81,6 +81,14 @@ struct dpu_kms {
+@@ -81,6 +81,17 @@ struct dpu_kms {
  
  	struct dpu_rm rm;
  
@@ -112,9 +122,12 @@ index e39831a..212b294 100644
 +	 * Set on runtime resume: the mdss power-domain collapse across
 +	 * system suspend loses volatile per-DSPP color state (e.g. the GC
 +	 * LUT), which the atomic restore does not re-program because the
-+	 * DRM state is unchanged. The next crtc commit re-applies it.
++	 * DRM state is unchanged. Color state is re-applied on every crtc
++	 * commit until this window closes - the first post-resume commit
++	 * can race the async domain/CTL restore and lose its writes, so
++	 * the repetition is what makes the corruption self-heal.
 +	 */
-+	bool dspp_color_state_dirty;
++	unsigned long dspp_color_dirty_until;
 +
  	struct dpu_hw_vbif *hw_vbif;
  	struct dpu_hw_mdp *hw_mdp;
