@@ -1,0 +1,153 @@
+From a97cbaae05baa71d8013507cf56fa386761fb015 Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Thu, 17 Sep 2026 13:15:51 -0600
+Subject: [PATCH] drm/msm/dpu: full-modeset system suspend/resume for the DPU
+ device
+
+The mdss power domain now legitimately collapses across system suspend
+(pd_ignore_unused dropped), destroying every volatile register and the
+DSPP GC LUT RAM. The driver's system PM path handles that with bare
+pm_runtime_force_suspend/force_resume, which assumes the hardware
+preserves state - it does not. Three classes of corruption follow:
+a stuck hardware-initiated CTL reset wedging the display (worked around
+by the reset-recovery series), the DSPP color LUTs returning as garbage
+(fixed by the read-and-restore pass), and CTL wipes landing between
+commits (fixed by the INTF_ACTIVE integrity check). All three are
+compensation for this one wrong assumption.
+
+Replace the force helpers with the downstream-style system PM
+sequence: wake the device, save and commit a full atomic disable
+(boot-shaped teardown against live hardware), quiesce clocks/domain,
+and on resume restore the duplicated state - a boot-shaped full
+modeset that re-programs every datapath block, including the color
+state, with no assumptions.
+
+With resume being a full modeset, the recovery series becomes
+defense-in-depth rather than the fix.
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c | 85 ++++++++++++++++++++++++-
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h |  3 +
+ 2 files changed, 86 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index 58d616d..e87b9d0 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -18,6 +18,8 @@
+ #include <drm/drm_file.h>
+ #include <drm/drm_framebuffer.h>
+ #include <drm/drm_vblank.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_kms_helper.h>
+ #include <drm/drm_writeback.h>
+ 
+ #include <linux/soc/qcom/ubwc.h>
+@@ -1479,10 +1481,89 @@ static int __maybe_unused dpu_runtime_resume(struct device *dev)
+ 	return rc;
+ }
+ 
++static int dpu_kms_pm_suspend(struct device *dev)
++{
++	struct platform_device *pdev = to_platform_device(dev);
++	struct msm_drm_private *priv = platform_get_drvdata(pdev);
++	struct dpu_kms *dpu_kms = to_dpu_kms(priv->kms);
++	struct drm_device *ddev = dpu_kms->dev;
++	int ret;
++
++	drm_kms_helper_poll_disable(ddev);
++
++	/*
++	 * Wake the device if runtime-suspended so the atomic teardown runs
++	 * against live hardware, then quiesce the entire pipeline: CRTCs
++	 * off, encoders disabled, datapath torn down. The power-domain
++	 * collapse that follows is safe because nothing trusts hardware
++	 * state across it - resume re-runs the full enable sequence.
++	 */
++	ret = pm_runtime_resume_and_get(dev);
++	if (ret)
++		goto poll_enable;
++
++	dpu_kms->suspend_state = drm_atomic_helper_suspend(ddev);
++	ret = PTR_ERR_OR_ZERO(dpu_kms->suspend_state);
++	if (ret) {
++		dpu_kms->suspend_state = NULL;
++		goto put_rpm;
++	}
++
++	/* pipeline fully quiesced - drop clocks, let the domain collapse */
++	ret = pm_runtime_force_suspend(dev);
++	if (ret)
++		goto undo;
++
++	/* balance the resume_and_get; device stays runtime-suspended */
++	pm_runtime_put_noidle(dev);
++
++	return 0;
++
++undo:
++	/* abort the suspend: restore the live state we just tore down */
++	drm_atomic_helper_resume(ddev, dpu_kms->suspend_state);
++	dpu_kms->suspend_state = NULL;
++put_rpm:
++	pm_runtime_put_noidle(dev);
++poll_enable:
++	drm_kms_helper_poll_enable(ddev);
++	return ret;
++}
++
++static int dpu_kms_pm_resume(struct device *dev)
++{
++	struct platform_device *pdev = to_platform_device(dev);
++	struct msm_drm_private *priv = platform_get_drvdata(pdev);
++	struct dpu_kms *dpu_kms = to_dpu_kms(priv->kms);
++	struct drm_device *ddev = dpu_kms->dev;
++	struct drm_atomic_state *state;
++	int ret;
++
++	ret = pm_runtime_force_resume(dev);
++	if (ret)
++		return ret;
++
++	state = dpu_kms->suspend_state;
++	dpu_kms->suspend_state = NULL;
++
++	/*
++	 * Re-run the full enable sequence from the saved state: resume
++	 * becomes a boot-shaped full modeset which re-programs every
++	 * datapath block (CTL, INTF, DSPP color state) that the power
++	 * domain collapse destroyed.
++	 */
++	ret = drm_atomic_helper_resume(ddev, state);
++	if (ret)
++		DPU_ERROR("atomic state restore failed: %d\n", ret);
++
++	drm_kms_helper_poll_enable(ddev);
++
++	return ret;
++}
++
+ static const struct dev_pm_ops dpu_pm_ops = {
+ 	SET_RUNTIME_PM_OPS(dpu_runtime_suspend, dpu_runtime_resume, NULL)
+-	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+-				pm_runtime_force_resume)
++	SET_SYSTEM_SLEEP_PM_OPS(dpu_kms_pm_suspend, dpu_kms_pm_resume)
+ 	.prepare = msm_kms_pm_prepare,
+ 	.complete = msm_kms_pm_complete,
+ };
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
+index 32ede7e..79aef05 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.h
+@@ -90,6 +90,9 @@ struct dpu_kms {
+ 	 */
+ 	bool dspp_color_state_dirty;
+ 
++	/* full atomic state saved across system suspend, re-committed at resume */
++	struct drm_atomic_state *suspend_state;
++
+ 	struct dpu_hw_vbif *hw_vbif;
+ 	struct dpu_hw_mdp *hw_mdp;
+ 
+-- 
+2.55.0
+

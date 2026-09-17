@@ -219,6 +219,21 @@ linuxPackagesFor (buildLinux {
       patch = ./dpu-intf-active-recovery.patch;
     }
 
+    # STRUCTURAL FIX — full-modeset system suspend/resume: the mdss
+    # domain collapse destroys all volatile display state, and the
+    # driver's bare pm_runtime_force_suspend/force_resume assumed it
+    # survived (the root assumption behind all three corruption modes).
+    # Replace with the downstream-style sequence: full atomic disable at
+    # suspend (teardown against live hardware), then clocks/domain off;
+    # resume re-commits the duplicated state — a boot-shaped full
+    # modeset that re-programs CTL, INTF and the DSPP color state with
+    # no assumptions. The recovery patches above demote to
+    # defense-in-depth once this lands.
+    {
+      name = "drm/msm/dpu: full-modeset system suspend/resume";
+      patch = ./dpu-kms-full-modeset-pm.patch;
+    }
+
     # TEMPORARY DIAGNOSTIC (2026-09-17) — remove after the suspend
     # corruption campaign: debugfs 'misr' file under the msm debug dir.
     # Samples the INTF MISR signature + scan counters on read (~2 s
