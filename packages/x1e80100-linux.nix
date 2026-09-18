@@ -254,6 +254,16 @@ linuxPackagesFor (buildLinux {
       patch = ./dpu-pm-presettle.patch;
     }
 
+    # TEMPORARY diagnostic — on-demand display state snapshot: writing to
+    # /sys/bus/platform/devices/ae01000.display-controller/trigger_snapshot
+    # fires msm_disp_snapshot_state() immediately, producing a devcoredump
+    # of every DPU block while a corruption artifact is live on screen,
+    # for left/right half datapath diffing. Remove after the campaign.
+    {
+      name = "drm/msm/dpu: on-demand display state snapshot trigger (temporary)";
+      patch = ./dpu-snapshot-trigger.patch;
+    }
+
     # EXPERIMENTAL (2026-09-16), NOT ENABLED: USB host-mode runtime PM.
     # dwc3_core_probe() pm_runtime_forbid()s the controller and never
     # lifts it, so the USB tree never autosuspends. This patch allows
