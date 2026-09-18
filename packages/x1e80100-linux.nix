@@ -189,8 +189,6 @@ linuxPackagesFor (buildLinux {
     # pre-patch; boot test pending.
     {
       name = "drm/msm/dpu: give the hw-initiated CTL reset a realistic wait at resume";
-      patch = ./dpu-ctl-hwreset-resume.patch;
-    }
 
     # SILENT corruption fix — per-commit read-and-restore (i915/amdgpu
     # precedence): the mdss power-domain collapse across suspend loses
@@ -209,8 +207,6 @@ linuxPackagesFor (buildLinux {
     #   distortion. On divergence both halves are re-programmed.
     {
       name = "drm/msm/dpu: verify-and-repair DSPP color state on every commit";
-      patch = ./dpu-dspp-color-resume.patch;
-    }
 
     # FLAT-PURPLE fix: the hardware-initiated CTL reset can complete
     # *between* commits — no wait fails, no error logged — and the wipe
@@ -221,8 +217,6 @@ linuxPackagesFor (buildLinux {
     # wipe self-heals within one commit.
     {
       name = "drm/msm/dpu: detect and recover CTL wipes between commits";
-      patch = ./dpu-intf-active-recovery.patch;
-    }
 
     # STRUCTURAL FIX — full-modeset system suspend/resume: the mdss
     # domain collapse destroys all volatile display state, and the
@@ -236,8 +230,6 @@ linuxPackagesFor (buildLinux {
     # defense-in-depth once this lands.
     {
       name = "drm/msm/dpu: full-modeset system suspend/resume";
-      patch = ./dpu-kms-full-modeset-pm.patch;
-    }
 
     # TEMPORARY DIAGNOSTIC (2026-09-17) — remove after the suspend
     # corruption campaign: debugfs 'misr' file under the msm debug dir.
@@ -246,8 +238,6 @@ linuxPackagesFor (buildLinux {
     # corruption enters the scanout path (datapath vs eDP link).
     {
       name = "drm/msm/dpu: debugfs MISR sampler (temporary diagnostic)";
-      patch = ./dpu-misr-debug.patch;
-    }
 
     # STABILIZATION — pre-settle the CTL reset off-screen: the power-domain
     # collapse can latch the hardware-initiated CTL reset, and kickoffs
@@ -258,8 +248,6 @@ linuxPackagesFor (buildLinux {
     # the atomic restore's first kickoff starts clean.
     {
       name = "drm/msm/dpu: pre-settle the CTL reset off-screen during system resume";
-      patch = ./dpu-pm-presettle.patch;
-    }
 
     # TEMPORARY diagnostic — on-demand display state snapshot: writing to
     # /sys/bus/platform/devices/ae01000.display-controller/trigger_snapshot
@@ -268,8 +256,6 @@ linuxPackagesFor (buildLinux {
     # for left/right half datapath diffing. Remove after the campaign.
     {
       name = "drm/msm/dpu: on-demand display state snapshot trigger (temporary)";
-      patch = ./dpu-snapshot-trigger.patch;
-    }
 
     # EXPERIMENTAL (2026-09-16), NOT ENABLED: USB host-mode runtime PM.
     # dwc3_core_probe() pm_runtime_forbid()s the controller and never
