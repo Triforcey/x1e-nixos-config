@@ -43,7 +43,7 @@ index da3556e..99582d0 100644
  	int ret = 0;
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.c
 new file mode 100644
-index 0000000..67faee3
+index 0000000..2cb7f39
 --- /dev/null
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.c
 @@ -0,0 +1,80 @@
@@ -72,6 +72,7 @@ index 0000000..67faee3
 +#include <linux/platform_device.h>
 +
 +#include "dpu_kms.h"
++#include "dpu_regdma_quiesce.h"
 +
 +#define REGDMA_WINDOW_BASE	0x0aeac000
 +#define REGDMA_WINDOW_SIZE	0x800
@@ -85,7 +86,6 @@ index 0000000..67faee3
 +
 +static void __iomem *regdma_window;
 +static struct device *qdev;
-+static DEFINE_MUTEX(qlock);
 +
 +void dpu_regdma_quiesce(void)
 +{
@@ -124,7 +124,7 @@ index 0000000..67faee3
 +	if (!regdma_window)
 +		return -ENOMEM;
 +
-+	regdma_quiesce();
++	dpu_regdma_quiesce();
 +	return 0;
 +}
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.h
