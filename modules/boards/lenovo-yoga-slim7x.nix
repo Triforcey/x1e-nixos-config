@@ -23,6 +23,19 @@ in
         "console=tty1"
       ];
 
+      # Spurious-wake suppression (x1e-porting issue #5 + the 2026-09-18
+      # display-corruption root cause): both hid-over-i2c input devices
+      # assert their wakeup lines with no real events behind them. The
+      # touchscreen (1-002c) fires an event storm during suspend (+1111
+      # events in a 2.8s window) that spurious-wakes the machine and
+      # corrupts the panel's internal state (wake mid-power-down); the
+      # touchpad (1-003a) asserts its line with zero counted events.
+      # Match keys verified live: both devices expose power/wakeup.
+      services.udev.extraRules = ''
+        SUBSYSTEM=="i2c", KERNEL=="1-003a", ATTR{power/wakeup}="disabled"
+        SUBSYSTEM=="i2c", KERNEL=="1-002c", ATTR{power/wakeup}="disabled"
+      '';
+
       boot.initrd.extraFirmwarePaths = [
         # Per-board DSP firmware set. The slim7x DTB (via the Linaro
         # cherry-picks) overrides the GPU zap-shader firmware-name to the
