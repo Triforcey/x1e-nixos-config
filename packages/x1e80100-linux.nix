@@ -204,18 +204,6 @@ linuxPackagesFor (buildLinux {
       patch = ./lenovo-yoga-slim7x-camera-regulators-fix.patch;
     }
 
-    # TEMPORARY — REG_DMA quiesce: hold the LUTDMA engines in reset and
-    # disarm stale bootloader-era queue descriptors. The Android display
-    # stack programs DSPP color payloads (PCC/GC/VLUT) through these
-    # engines and re-triggers them per frame (SB queue is DSPP-flush
-    # hardware-triggered); mainline never initializes them, and stale
-    # engine state is implicated in the half-panel corruption (see
-    # x1e-porting issues.md #17). Remove when the full REG_DMA color
-    # port lands.
-    {
-      name = "drm/msm/dpu: quiesce REG_DMA engines (temporary)";
-      patch = ./dpu-regdma-quiesce.patch;
-    }
     # The camera sensor's rotation is left unset: the native readout is
     # upright on this panel mounting, and libcamera treats a missing/0
     # rotation as no transform. A rotation=<180> patch was tried and
