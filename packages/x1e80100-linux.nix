@@ -197,9 +197,16 @@ linuxPackagesFor (buildLinux {
     # volatile per-DSPP color state, and a full atomic modeset does not
     # re-program the DSPP LUT RAM (the duplicated DRM state reports no
     # color-management change). Instead of gating on resume events, the
-    # color state is verified on EVERY commit: the GC LUT is read back
-    # through the indexed ports, compared against the software LUT, and
-    # repaired on mismatch (bounded retries, ratelimited logging).
+    # color state is verified on EVERY commit:
+    # - GC LUT: read back through the indexed ports, compared against
+    #   the software LUT, repaired on mismatch (bounded retries) — with
+    #   the DSPP flush bit staged, without which the repair writes stay
+    #   shadowed.
+    # - PCC: the two DSPPs must agree on the PCC op register — the
+    #   enable bit is volatile across the collapse and was observed
+    #   latched on one half and cleared on the other (captured live with
+    #   the corruption on screen), surfacing as per-half color
+    #   distortion. On divergence both halves are re-programmed.
     {
       name = "drm/msm/dpu: verify-and-repair DSPP color state on every commit";
       patch = ./dpu-dspp-color-resume.patch;

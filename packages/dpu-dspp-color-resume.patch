@@ -1,35 +1,36 @@
-From b65a4b502acb341a1acd32d1cfa24267ecbfddc6 Mon Sep 17 00:00:00 2001
+From d4fe6265799a5fb028b72dbb6dfe765f85ca4393 Mon Sep 17 00:00:00 2001
 From: mocoy <judsonwebdesign@gmail.com>
-Date: Thu, 17 Sep 2026 18:27:38 -0600
-Subject: [PATCH] drm/msm/dpu: read-and-restore DSPP color state on every
- commit
+Date: Thu, 17 Sep 2026 21:16:55 -0600
+Subject: [PATCH] drm/msm/dpu: verify-and-repair DSPP color state on every
+ commit (GC + PCC)
 
-The volatile per-DSPP color state (the GC LUT RAM) can diverge from
-software at any mdss power-domain transition - system suspend or
-runtime - and a full atomic modeset does not re-program the DSPP LUT
-RAM (the duplicated DRM state reports no color-management change, so
-setup_cp_blocks skips it).
+The volatile per-DSPP color state can diverge from software at any
+power-domain transition - system suspend or runtime - and a full
+atomic modeset does not re-program the DSPP LUT RAM (the duplicated
+DRM state reports no color-management change).
 
-Instead of gating the verification on resume events, verify on every
-commit: read the GC LUT back through the indexed ports, compare
-against the software LUT, and repair on mismatch (bounded retries,
-ratelimited logging). The PCC/GC programming loop itself remains
-gated on color_mgmt_changed as upstream has it.
-
-- dpu_hw_dspp: expose collect_gc_lut (indexed readback).
-- dpu_crtc: unconditional verify-and-repair pass after the color
-  programming loop in _dpu_crtc_setup_cp_blocks().
+Verify on every commit:
+- GC LUT: read back through the indexed ports, compare against the
+  software LUT, repair on mismatch (bounded retries). The repair now
+  stages the DSPP GC flush bit - without it the LUT writes stay
+  shadowed and never reach the datapath.
+- PCC: the two DSPPs must agree on the PCC op register. The enable bit
+  is volatile across the domain collapse and has been observed latched
+  on one half and cleared on the other (dspp_0 op=1, dspp_1=0, with
+  otherwise identical registers - captured live with the corruption on
+  screen), surfacing as per-half color distortion. On divergence both
+  halves are re-programmed from the software state.
 ---
- drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c    | 40 +++++++++++++++++++++
- drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c | 28 +++++++++++++++
- drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h | 11 ++++++
- 3 files changed, 79 insertions(+)
+ drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c    | 96 +++++++++++++++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c | 36 ++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h | 16 ++++
+ 3 files changed, 148 insertions(+)
 
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-index 42d0a52..86b162d 100644
+index 42d0a52..5fb6315 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_crtc.c
-@@ -896,6 +896,46 @@ static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
+@@ -896,6 +896,102 @@ static void _dpu_crtc_setup_cp_blocks(struct drm_crtc *crtc)
  				mixer[i].hw_dspp->idx, DPU_DSPP_GC);
  		}
  	}
@@ -40,6 +41,8 @@ index 42d0a52..86b162d 100644
 +	 * (system suspend or runtime), and a modeset does not re-program
 +	 * the DSPP LUT RAM. Read the GC LUT back through the indexed ports
 +	 * and repair until it matches the software state (bounded retries).
++	 * NOTE: the repair must stage the DSPP flush bit - without it the
++	 * LUT writes stay shadowed and never reach the datapath.
 +	 */
 +	if (state->gamma_lut && cstate->num_mixers && mixer[0].hw_dspp &&
 +	    mixer[0].hw_dspp->ops.collect_gc_lut) {
@@ -51,9 +54,10 @@ index 42d0a52..86b162d 100644
 +
 +		for (i = 0; expect && rb && i < cstate->num_mixers; i++) {
 +			struct dpu_hw_dspp *dspp = mixer[i].hw_dspp;
++			struct dpu_hw_ctl *ctl = mixer[i].lm_ctl;
 +			int a;
 +
-+			if (!dspp || !dspp->ops.collect_gc_lut)
++			if (!dspp || !dspp->ops.collect_gc_lut || !ctl)
 +				continue;
 +			for (a = 0; a < 3; a++) {
 +				if (!dspp->ops.collect_gc_lut(dspp, rb) &&
@@ -62,6 +66,9 @@ index 42d0a52..86b162d 100644
 +				    !memcmp(rb->c2, expect->c2, sizeof(expect->c2)))
 +					break;
 +				dspp->ops.setup_gc(dspp, expect);
++				if (ctl->ops.update_pending_flush_dspp)
++					ctl->ops.update_pending_flush_dspp(ctl,
++						dspp->idx, DPU_DSPP_GC);
 +				pr_err_ratelimited("[dpu] dspp%d GC LUT mismatch: repaired\n",
 +						   dspp->idx - DSPP_0);
 +			}
@@ -73,14 +80,64 @@ index 42d0a52..86b162d 100644
 +		kfree(rb);
 +		kfree(expect);
 +	}
++
++	/*
++	 * PCC: the two DSPPs must agree on the PCC op register. The enable
++	 * bit is volatile across the domain collapse and has been observed
++	 * latched on one half and cleared on the other (dspp_0 op=1,
++	 * dspp_1=0, with otherwise identical registers), surfacing as
++	 * per-half color distortion that neither a modeset nor the GC verify
++	 * covers. Repair both halves from the software state.
++	 */
++	{
++		u32 ops[4] = { 0, 0, 0, 0 };
++		bool checked = false, differ = false;
++		int j;
++
++		for (i = 0; i < cstate->num_mixers && i < 4; i++) {
++			struct dpu_hw_dspp *dspp = mixer[i].hw_dspp;
++
++			if (!dspp || !dspp->ops.collect_pcc)
++				continue;
++			ops[i] = dspp->ops.collect_pcc(dspp);
++			checked = true;
++		}
++		for (j = 1; j < cstate->num_mixers && j < 4; j++)
++			if (ops[j] != ops[0])
++				differ = true;
++
++		if (checked && differ) {
++			struct dpu_hw_pcc_cfg cfg;
++			bool have_cfg = false;
++
++			if (state->ctm) {
++				_dpu_crtc_get_pcc_coeff(state, &cfg);
++				have_cfg = true;
++			}
++
++			for (i = 0; i < cstate->num_mixers; i++) {
++				struct dpu_hw_dspp *dspp = mixer[i].hw_dspp;
++				struct dpu_hw_ctl *ctl = mixer[i].lm_ctl;
++
++				if (!dspp || !dspp->ops.setup_pcc || !ctl)
++					continue;
++				dspp->ops.setup_pcc(dspp, have_cfg ? &cfg : NULL);
++				if (ctl->ops.update_pending_flush_dspp)
++					ctl->ops.update_pending_flush_dspp(ctl,
++						dspp->idx, DPU_DSPP_PCC);
++				pr_err_ratelimited("[dpu] dspp%d PCC op mismatch: repaired\n",
++						   dspp->idx - DSPP_0);
++			}
++		}
++	}
  }
  
  static void dpu_crtc_atomic_begin(struct drm_crtc *crtc,
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
-index 23dcbe1..7f4c0d5 100644
+index 23dcbe1..eb4ece3 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.c
-@@ -75,6 +75,32 @@ static void dpu_setup_dspp_pcc(struct dpu_hw_dspp *ctx,
+@@ -75,6 +75,40 @@ static void dpu_setup_dspp_pcc(struct dpu_hw_dspp *ctx,
  	DPU_REG_WRITE(&ctx->hw, base, PCC_EN);
  }
  
@@ -110,23 +167,31 @@ index 23dcbe1..7f4c0d5 100644
 +	return 0;
 +}
 +
++static u32 dpu_hw_dspp_collect_pcc(struct dpu_hw_dspp *ctx)
++{
++	if (!ctx || !ctx->cap->sblk->pcc.base)
++		return 0;
++
++	return DPU_REG_READ(&ctx->hw, ctx->cap->sblk->pcc.base);
++}
++
  static void dpu_setup_dspp_gc(struct dpu_hw_dspp *ctx,
  		struct dpu_hw_gc_lut *gc_lut)
  {
-@@ -146,6 +172,8 @@ struct dpu_hw_dspp *dpu_hw_dspp_init(struct drm_device *dev,
+@@ -146,6 +180,8 @@ struct dpu_hw_dspp *dpu_hw_dspp_init(struct drm_device *dev,
  		c->ops.setup_pcc = dpu_setup_dspp_pcc;
  	if (c->cap->sblk->gc.base)
  		c->ops.setup_gc = dpu_setup_dspp_gc;
-+	if (c->cap->sblk->gc.base)
-+		c->ops.collect_gc_lut = dpu_hw_dspp_collect_gc_lut;
++	if (c->cap->sblk->pcc.base)
++		c->ops.collect_pcc = dpu_hw_dspp_collect_pcc;
  
  	return c;
  }
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
-index b47b778..a786156 100644
+index b47b778..db72fb5 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_hw_dspp.h
-@@ -72,6 +72,17 @@ struct dpu_hw_dspp_ops {
+@@ -72,6 +72,22 @@ struct dpu_hw_dspp_ops {
  	 */
  	void (*setup_gc)(struct dpu_hw_dspp *ctx, struct dpu_hw_gc_lut *gc_lut);
  
@@ -134,12 +199,17 @@ index b47b778..a786156 100644
 +	 * collect_gc_lut - read the GC LUT back from the DSPP hardware
 +	 * @ctx: dspp ctx pointer
 +	 * @gc_lut: buffer to fill with the hardware LUT contents
-+	 *
-+	 * Read-and-restore support: reads the volatile LUT through the
-+	 * indexed GC data ports so callers can verify that programmed
-+	 * color state actually landed in the hardware.
 +	 */
 +	int (*collect_gc_lut)(struct dpu_hw_dspp *ctx, struct dpu_hw_gc_lut *gc_lut);
++
++	/**
++	 * collect_pcc - read the PCC op register from the DSPP hardware
++	 * @ctx: dspp ctx pointer
++	 *
++	 * Returns the PCC op/enable register so callers can verify that both
++	 * halves' color-correction blocks agree with the software state.
++	 */
++	u32 (*collect_pcc)(struct dpu_hw_dspp *ctx);
 +
  };
  
