@@ -192,18 +192,16 @@ linuxPackagesFor (buildLinux {
       patch = ./dpu-ctl-hwreset-resume.patch;
     }
 
-    # SILENT corruption fix, read-and-restore style (i915/amdgpu
+    # SILENT corruption fix — per-commit read-and-restore (i915/amdgpu
     # precedence): the mdss power-domain collapse across suspend loses
-    # volatile per-DSPP color state; both DSPPs come back holding
-    # diverged register content (devcoredump) and the atomic restore
-    # never re-programs them because the DRM state reports no
-    # color-management change. Instead of time-based windows, the color
-    # state is flagged dirty at runtime resume (and after CTL-reset
-    # recovery); the next commit re-applies PCC/GC and then READS the GC
-    # LUT back through the indexed ports, repairing until the hardware
-    # matches software (bounded retries).
+    # volatile per-DSPP color state, and a full atomic modeset does not
+    # re-program the DSPP LUT RAM (the duplicated DRM state reports no
+    # color-management change). Instead of gating on resume events, the
+    # color state is verified on EVERY commit: the GC LUT is read back
+    # through the indexed ports, compared against the software LUT, and
+    # repaired on mismatch (bounded retries, ratelimited logging).
     {
-      name = "drm/msm/dpu: read-and-restore DSPP color state after power-domain collapse";
+      name = "drm/msm/dpu: verify-and-repair DSPP color state on every commit";
       patch = ./dpu-dspp-color-resume.patch;
     }
 
