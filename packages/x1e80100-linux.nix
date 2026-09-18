@@ -204,6 +204,24 @@ linuxPackagesFor (buildLinux {
       patch = ./lenovo-yoga-slim7x-camera-regulators-fix.patch;
     }
 
+    # DISPLAY CAMPAIGN (2026-09-18): the ATNA33XC20 panel power sequencing —
+    # enforce a longer off-to-on time than the spec T12 minimum (500ms):
+    # at the minimum the panel's internal state corrupts when the system
+    # resumes inside the power-down window. Enforced in the driver's
+    # generic re-power path for all re-powers.
+    {
+      name = "drm/panel: samsung atna33xc20: extended power-off time";
+      patch = ./panel-atna33xc20-extended-off-time.patch;
+    }
+    # qcom-battmgr: the battery status events wake the SoC during suspend
+    # (~2.8s spurious wakes, drain). No userspace knob exists (the
+    # power_supply device has no power/wakeup attribute — verified), so
+    # disarm the wakeup at registration.
+    {
+      name = "power: supply: qcom_battmgr: disarm battery wakeup at probe";
+      patch = ./qcom-battmgr-wakeup-disable.patch;
+    }
+
 
     # The camera sensor's rotation is left unset: the native readout is
     # upright on this panel mounting, and libcamera treats a missing/0

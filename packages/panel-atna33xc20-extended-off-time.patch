@@ -1,0 +1,22 @@
+diff --git a/drivers/gpu/drm/panel/panel-samsung-atna33xc20.c b/drivers/gpu/drm/panel/panel-samsung-atna33xc20.c
+index 20ec27d..ea8fe19 100644
+--- a/drivers/gpu/drm/panel/panel-samsung-atna33xc20.c
++++ b/drivers/gpu/drm/panel/panel-samsung-atna33xc20.c
+@@ -86,8 +86,15 @@ static int atana33xc20_resume(struct device *dev)
+ 	int hpd_asserted;
+ 	int ret;
+ 
+-	/* T12 (Power off time) is min 500 ms */
+-	atana33xc20_wait(p->powered_off_time, 500);
++	/*
++	 * T12 (Power off time) is min 500 ms per spec. Campaign finding
++	 * (2026-09-18, Lenovo Yoga Slim 7x): at the spec minimum the
++	 * panel's internal state corrupts when the system resumes inside
++	 * the power-down window (spurious auto-wakes landing mid-sequence,
++	 * resumed battery at 97%+). 1500 ms empirically clean. Enforced
++	 * here for every re-power, not bound to resume.
++	 */
++	atana33xc20_wait(p->powered_off_time, 1500);
+ 
+ 	ret = regulator_enable(p->supply);
+ 	if (ret)

@@ -1,0 +1,42 @@
+diff --git a/drivers/power/supply/qcom_battmgr.c b/drivers/power/supply/qcom_battmgr.c
+index 490137a..305dd66 100644
+--- a/drivers/power/supply/qcom_battmgr.c
++++ b/drivers/power/supply/qcom_battmgr.c
+@@ -5,6 +5,7 @@
+  * Copyright (c) Qualcomm Technologies, Inc. and/or its subsidiaries.
+  */
+ #include <linux/auxiliary_bus.h>
++#include <linux/pm_wakeup.h>
+ #include <linux/module.h>
+ #include <linux/mutex.h>
+ #include <linux/nvmem-consumer.h>
+@@ -1674,6 +1675,14 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 		if (IS_ERR(battmgr->bat_psy))
+ 			return dev_err_probe(dev, PTR_ERR(battmgr->bat_psy),
+ 					     "failed to register battery power supply\n");
++		/*
++		 * The battery's periodic status events wake the SoC during
++		 * suspend (~2.8s spurious wakes on X1E80100). The psy device
++		 * exposes no power/wakeup attribute, so userspace cannot
++		 * disarm this — do it here. Events still arrive and populate
++		 * the class counters, they just no longer wake.
++		 */
++		device_wakeup_disable(&battmgr->bat_psy->dev);
+ 
+ 		battmgr->ac_psy = devm_power_supply_register(dev, &sc8280xp_ac_psy_desc, &psy_cfg_supply);
+ 		if (IS_ERR(battmgr->ac_psy))
+@@ -1699,6 +1708,14 @@ static int qcom_battmgr_probe(struct auxiliary_device *adev,
+ 		if (IS_ERR(battmgr->bat_psy))
+ 			return dev_err_probe(dev, PTR_ERR(battmgr->bat_psy),
+ 					     "failed to register battery power supply\n");
++		/*
++		 * The battery's periodic status events wake the SoC during
++		 * suspend (~2.8s spurious wakes on X1E80100). The psy device
++		 * exposes no power/wakeup attribute, so userspace cannot
++		 * disarm this — do it here. Events still arrive and populate
++		 * the class counters, they just no longer wake.
++		 */
++		device_wakeup_disable(&battmgr->bat_psy->dev);
+ 
+ 		battmgr->usb_psy = devm_power_supply_register(dev, &sm8350_usb_psy_desc, &psy_cfg_supply);
+ 		if (IS_ERR(battmgr->usb_psy))
