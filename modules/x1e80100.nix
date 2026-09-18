@@ -101,11 +101,6 @@ in
             "qcom/x1e80100/gen70500_zap.mbn"
           ];
 
-          boot.extraModulePackages = [
-            (pkgs.callPackage ../packages/msm-kernel-module.nix {
-              kernel = config.boot.kernelPackages.kernel;
-            })
-          ];
         }
       ]
     );

@@ -204,6 +204,21 @@ linuxPackagesFor (buildLinux {
       patch = ./lenovo-yoga-slim7x-camera-regulators-fix.patch;
     }
 
+    # DISPLAY CAMPAIGN (2026-09-18): REG_DMA quiesce + resume color
+    # re-program + tunable resume delay. Root cause chain established on
+    # fertile-forge: the panel corruption is panel-internal bad state from
+    # a too-early wake; the REG_DMA engines were re-clobbering DSPP color
+    # writes (quiesce confirmed by the DPMS-cycle behavior change), and
+    # the color re-program was gated off at resume. The delay parameter
+    # sweeps the panel wake threshold live:
+    #   /sys/module/msm/parameters/dpu_resume_delay_ms
+    # In-tree (kernelPatches) because the extraModulePackages route did
+    # not take effect on the device.
+    {
+      name = "drm/msm/dpu: REG_DMA quiesce + resume color reprogram + wake delay (campaign)";
+      patch = ./dpu-resume-color-reprogram.patch;
+    }
+
     # The camera sensor's rotation is left unset: the native readout is
     # upright on this panel mounting, and libcamera treats a missing/0
     # rotation as no transform. A rotation=<180> patch was tried and
