@@ -100,16 +100,13 @@ in
             "qcom/gen70500_gmu.bin"
             "qcom/x1e80100/gen70500_zap.mbn"
           ];
+
+          boot.extraModulePackages = [
+            (pkgs.callPackage ../packages/msm-kernel-module.nix {
+              kernel = config.boot.kernelPackages.kernel;
+            })
+          ];
         }
       ]
     );
-  # msm display module as a single-module package: carries the REG_DMA
-  # quiesce diagnostic, rebuilds in ~2 min per fix instead of a full
-  # kernel rebuild (NixOS wiki: patching a single in-tree kernel module).
-  boot.extraModulePackages = [
-    (pkgs.callPackage ../packages/msm-kernel-module.nix {
-      kernel = config.boot.kernelPackages.kernel;
-    })
-  ];
-
 }
