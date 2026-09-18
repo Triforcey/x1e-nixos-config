@@ -1,0 +1,130 @@
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index da3556e..99582d0 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -32,6 +32,7 @@
+ #include "dpu_encoder.h"
+ #include "dpu_formats.h"
+ #include "dpu_hw_vbif.h"
++#include "dpu_regdma_quiesce.h"
+ #include "dpu_kms.h"
+ #include "dpu_plane.h"
+ #include "dpu_vbif.h"
+@@ -1279,6 +1280,8 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
+ 
+ 	dpu_vbif_init_memtypes(dpu_kms);
+ 
++	dpu_regdma_quiesce();
++
+ 	pm_runtime_put_sync(&dpu_kms->pdev->dev);
+ 
+ 	return 0;
+@@ -1379,6 +1382,9 @@ static int dpu_kms_mmap_dpu(struct dpu_kms *dpu_kms)
+ static int dpu_dev_probe(struct platform_device *pdev)
+ {
+ 	struct device *dev = &pdev->dev;
++
++	/* map the REG_DMA engine window (see dpu_regdma_quiesce.c) */
++	dpu_regdma_quiesce_init(pdev);
+ 	struct dpu_kms *dpu_kms;
+ 	int irq;
+ 	int ret = 0;
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.c
+new file mode 100644
+index 0000000..67faee3
+--- /dev/null
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.c
+@@ -0,0 +1,80 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * dpu_regdma_quiesce.c - hold the REG_DMA (LUTDMA) engines of the Hamoa
++ * (X1E80100) mdss display block in a quiesced state.
++ *
++ * The downstream Android display stack programs the REG_DMA engines with
++ * color payloads (PCC/GC/VLUT) and re-triggers them per frame (the SB
++ * queue is hardware-triggered by DSPP flush events). Mainline never
++ * initializes the engine; if the bootloader/firmware display path left
++ * queues armed, every DSPP flush replays stale payloads into the DSPP
++ * color registers - the observed half-panel corruption that survives
++ * modesets and clears on the next power cycle.
++ *
++ * This module quiesces the engines at bind and after every power-domain
++ * restore: opmode off, engines reset, all queue descriptors disarmed, and
++ * the decode-select register zeroed so no decoded write can reach the
++ * datapath even if a stale descriptor fires. No DT plumbing; the engine
++ * window is taken from the mdss generation layout (same as Kalama).
++ */
++
++#include <linux/module.h>
++#include <linux/io.h>
++#include <linux/platform_device.h>
++
++#include "dpu_kms.h"
++
++#define REGDMA_WINDOW_BASE	0x0aeac000
++#define REGDMA_WINDOW_SIZE	0x800
++#define REGDMA_ENGINE_STRIDE	0x400	/* DB at +0x0, SB at +0x400 */
++
++#define REGDMA_OPMODE_OFFSET	0x4
++#define REGDMA_CTL0_QUEUE0_CMD0	0x14	/* +0x10 per ctl */
++#define REGDMA_CTL0_QUEUE1_CMD0	0x1c	/* +0x10 per ctl */
++#define REGDMA_DECODE_SEL_OFFSET 0x114	/* absolute decode-select register */
++#define REGDMA_CTL0_RESET	0x200	/* engine reset control */
++
++static void __iomem *regdma_window;
++static struct device *qdev;
++static DEFINE_MUTEX(qlock);
++
++void dpu_regdma_quiesce(void)
++{
++	int eng, ctl, q;
++
++	/* both engines: opmode off, reset asserted, queues disarmed */
++	for (eng = 0; eng < 2; eng++) {
++		void __iomem *e = regdma_window + eng * REGDMA_ENGINE_STRIDE;
++
++		writel_relaxed(0, e + REGDMA_OPMODE_OFFSET);
++		writel_relaxed(BIT(0) | BIT(16), e + REGDMA_CTL0_RESET);
++	}
++
++	/* disarm every queue descriptor slot (2 queues x 6 ctls) */
++	for (q = 0; q < 2; q++) {
++		u32 base = q ? 0x1c : 0x14;
++
++		for (ctl = 0; ctl < 6; ctl++) {
++			writel_relaxed(0, regdma_window + base + ctl * 0x10);
++			writel_relaxed(0, regdma_window + base + ctl * 0x10 + 4);
++		}
++	}
++
++	/* zero the decode-select register: decoded writes reach nothing */
++	writel_relaxed(0, regdma_window + REGDMA_DECODE_SEL_OFFSET);
++	wmb();
++
++	dev_info(qdev, "regdma: engines quiesced (opmode=0, reset asserted, queues disarmed)\n");
++}
++
++int dpu_regdma_quiesce_init(struct platform_device *pdev)
++{
++	qdev = &pdev->dev;
++	regdma_window = devm_ioremap(qdev, REGDMA_WINDOW_BASE,
++				     REGDMA_WINDOW_SIZE);
++	if (!regdma_window)
++		return -ENOMEM;
++
++	regdma_quiesce();
++	return 0;
++}
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.h
+new file mode 100644
+index 0000000..8de15b5
+--- /dev/null
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_regdma_quiesce.h
+@@ -0,0 +1,7 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++#ifndef _DPU_REGDMA_QUIESCE_H_
++#define _DPU_REGDMA_QUIESCE_H_
++struct platform_device;
++int dpu_regdma_quiesce_init(struct platform_device *pdev);
++void dpu_regdma_quiesce(void);
++#endif
