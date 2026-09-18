@@ -86,6 +86,8 @@ in
             "module_blacklist=algif_aead,esp4,esp6,rxrpc"
           ];
 
+          boot.blacklistedKernelModules = [ "qcom_iris" ];
+
           hardware.deviceTree.enable = true;
 
           boot.kernelPackages = lib.mkDefault pkgs.linuxPackages_latest;
