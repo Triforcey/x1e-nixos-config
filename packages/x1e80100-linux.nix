@@ -242,6 +242,18 @@ linuxPackagesFor (buildLinux {
       patch = ./dpu-misr-debug.patch;
     }
 
+    # STABILIZATION — pre-settle the CTL reset off-screen: the power-domain
+    # collapse can latch the hardware-initiated CTL reset, and kickoffs
+    # that hit a pending reset surface as a solid-color screen until the
+    # per-commit recovery converges (~16 s of blue observed on the first
+    # wake). Poll each ctl's reset status in dpu_kms_pm_resume — while
+    # the display is still dark — re-arming and waiting (bounded), so
+    # the atomic restore's first kickoff starts clean.
+    {
+      name = "drm/msm/dpu: pre-settle the CTL reset off-screen during system resume";
+      patch = ./dpu-pm-presettle.patch;
+    }
+
     # EXPERIMENTAL (2026-09-16), NOT ENABLED: USB host-mode runtime PM.
     # dwc3_core_probe() pm_runtime_forbid()s the controller and never
     # lifts it, so the USB tree never autosuspends. This patch allows

@@ -1,0 +1,113 @@
+From b5aaa1a4bf7323ddecf9d39942275e137ab16855 Mon Sep 17 00:00:00 2001
+From: mocoy <judsonwebdesign@gmail.com>
+Date: Thu, 17 Sep 2026 19:20:07 -0600
+Subject: [PATCH] drm/msm/dpu: pre-settle the CTL reset off-screen during
+ system resume
+
+On X1E80100 the power-domain collapse at suspend can latch the
+hardware-initiated CTL reset, and the first atomic restore's kickoffs
+can hit the pending reset repeatedly: each commit waits (fails),
+re-arms, reprograms, and the panel shows a solid color for the ~16 s
+the convergence takes (observed: 57 recovery polls across the storm).
+
+Move the convergence off-screen: dpu_kms_pm_resume polls each ctl's
+reset status after force_resume - while the display is still dark -
+re-arming and waiting with a bounded budget (10 x 20 ms). If it
+settles there, the atomic restore's first kickoff is clean and the
+panel never shows the stuck window; if it does not, the per-commit
+verify-and-recover path still covers it.
+
+- dpu_encoder: dpu_encoder_get_first_hw_ctl() walker.
+- dpu_kms: pre-settle pass in dpu_kms_pm_resume.
+---
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c | 19 +++++++++++++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h |  2 ++
+ drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c     | 30 +++++++++++++++++++++
+ 3 files changed, 51 insertions(+)
+
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+index 659fd00..0c7eba5 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.c
+@@ -219,6 +219,25 @@ struct dpu_encoder_virt {
+ 
+ #define to_dpu_encoder_virt(x) container_of(x, struct dpu_encoder_virt, base)
+ 
++/**
++ * dpu_encoder_get_first_hw_ctl - return the hw_ctl of the first physical
++ * encoder that owns one, or NULL.
++ */
++struct dpu_hw_ctl *dpu_encoder_get_first_hw_ctl(struct drm_encoder *drm_enc)
++{
++	struct dpu_encoder_virt *dpu_enc = to_dpu_encoder_virt(drm_enc);
++	int i;
++
++	for (i = 0; i < dpu_enc->num_phys_encs; i++) {
++		struct dpu_encoder_phys *phys = dpu_enc->phys_encs[i];
++
++		if (phys && phys->hw_ctl)
++			return phys->hw_ctl;
++	}
++
++	return NULL;
++}
++
+ /**
+  * dpu_encoder_get_active_hw_intf - debug helper returning the hw_intf of
+  * the first physical encoder that owns one (e.g. the active video intf),
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+index 3a3bc6e..454bb0d 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_encoder.h
+@@ -105,5 +105,7 @@ struct dpu_hw_intf;
+  * physical encoder that owns one, or NULL.
+  */
+ struct dpu_hw_intf *dpu_encoder_get_active_hw_intf(struct drm_encoder *drm_enc);
++struct dpu_hw_ctl;
++struct dpu_hw_ctl *dpu_encoder_get_first_hw_ctl(struct drm_encoder *drm_enc);
+ 
+ #endif /* __DPU_ENCODER_H__ */
+diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+index 694ac81..68aa2ea 100644
+--- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
++++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
+@@ -1568,6 +1568,36 @@ static int dpu_kms_pm_resume(struct device *dev)
+ 	if (ret)
+ 		return ret;
+ 
++	/*
++	 * Pre-settle the CTL reset before the atomic restore re-runs the
++	 * enable sequence: the power-domain collapse can latch the
++	 * hardware-initiated CTL reset, and kickoffs that hit a pending
++	 * reset surface as a solid-color screen until the per-commit
++	 * recovery converges. Retry here, off-screen, bounded - the panel
++	 * is dark during this phase, so the retry storm is invisible.
++	 */
++	{
++		struct drm_encoder *encoder;
++		int attempts;
++
++		drm_for_each_encoder(encoder, ddev) {
++			struct dpu_hw_ctl *ctl = dpu_encoder_get_first_hw_ctl(encoder);
++
++			if (!ctl || !ctl->ops.wait_reset_status)
++				continue;
++			for (attempts = 0; attempts < 10; attempts++) {
++				if (!ctl->ops.wait_reset_status(ctl))
++					break;
++				if (ctl->ops.reset)
++					ctl->ops.reset(ctl);
++				msleep(20);
++			}
++			if (attempts == 10)
++				DPU_ERROR("ctl %d reset still pending after pre-settle\n",
++						ctl->idx);
++		}
++	}
++
+ 	state = dpu_kms->suspend_state;
+ 	dpu_kms->suspend_state = NULL;
+ 
+-- 
+2.55.0
+
