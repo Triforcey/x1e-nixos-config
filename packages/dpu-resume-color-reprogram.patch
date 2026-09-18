@@ -1964,28 +1964,45 @@ index 0000000..ffde6f4
 +	return crtc;
 +}
 diff --git a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
-index da3556e..da033c3 100644
+index da3556e..27a04bb 100644
 --- a/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
 +++ b/drivers/gpu/drm/msm/disp/dpu1/dpu_kms.c
-@@ -32,6 +32,7 @@
+@@ -32,6 +32,22 @@
  #include "dpu_encoder.h"
  #include "dpu_formats.h"
  #include "dpu_hw_vbif.h"
 +#include "dpu_regdma_quiesce.h"
++
++/*
++ * EXPERIMENT (display campaign): hold the resume for this long after the
++ * mdss domain restores, before the panel re-powers. The panel-internal
++ * state corruption appears when the wake happens too early; sweep this
++ * value (0/100/200/400) live via
++ * /sys/module/msm/parameters/dpu_resume_delay_ms to find the threshold.
++ * If a plain delay fixes it, the proper fix is enforcing the panel's
++ * documented power-up delay in panel-edp; if not, the panel needs a full
++ * power cycle, not just time.
++ */
++static unsigned int dpu_resume_delay_ms = 200;
++module_param(dpu_resume_delay_ms, uint, 0644);
++MODULE_PARM_DESC(dpu_resume_delay_ms,
++		 "ms to hold resume open before the panel re-powers (display campaign experiment)");
  #include "dpu_kms.h"
  #include "dpu_plane.h"
  #include "dpu_vbif.h"
-@@ -1279,6 +1280,9 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
+@@ -1279,6 +1295,11 @@ static int dpu_kms_hw_init(struct msm_kms *kms)
  
  	dpu_vbif_init_memtypes(dpu_kms);
  
 +	dpu_regdma_quiesce();
 +	dpu_kms->dspp_color_state_dirty = true;
 +
++	msleep(dpu_resume_delay_ms);
++
  	pm_runtime_put_sync(&dpu_kms->pdev->dev);
  
  	return 0;
-@@ -1379,6 +1383,9 @@ static int dpu_kms_mmap_dpu(struct dpu_kms *dpu_kms)
+@@ -1379,6 +1400,9 @@ static int dpu_kms_mmap_dpu(struct dpu_kms *dpu_kms)
  static int dpu_dev_probe(struct platform_device *pdev)
  {
  	struct device *dev = &pdev->dev;
