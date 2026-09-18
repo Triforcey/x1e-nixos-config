@@ -57,7 +57,6 @@ in
             "gpucc-x1e80100"
             "phy_qcom_edp"
             "panel_edp"
-            "msm"
             "nvme"
             "phy_qcom_qmp_pcie"
 
@@ -100,6 +99,17 @@ in
             "qcom/gen70500_gmu.bin"
             "qcom/x1e80100/gen70500_zap.mbn"
           ];
+
+          # msm display: single-module package (REG_DMA quiesce — see
+          # packages/dpu-resume-color-reprogram.patch). Loads in stage 2:
+          # boot.kernelModules forces OUR copy (updates/ wins over the
+          # in-tree msm.ko), so msm must NOT be in the initrd module list.
+          boot.extraModulePackages = [
+            (pkgs.callPackage ../packages/msm-kernel-module.nix {
+              kernel = config.boot.kernelPackages.kernel;
+            })
+          ];
+          boot.kernelModules = [ "msm" ];
 
         }
       ]
